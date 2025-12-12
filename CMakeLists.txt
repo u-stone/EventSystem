@@ -1,7 +1,48 @@
-cmake_minimum_required(VERSION 3.10)
-project(EventSystem)
+# Set the minimum required version of CMake and project details
+cmake_minimum_required(VERSION 3.14)
+project(NotifyCenter CXX)
 
+# Set the C++ standard to 17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(main main.cpp)
+# --- Include Directories ---
+# Add the 'include' directory to the include path
+include_directories(include)
+
+
+# --- Google Test Framework ---
+# Enable testing for the project. Must be called before adding tests.
+enable_testing()
+
+# Use FetchContent to download Google Test automatically if not found
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+)
+
+# For projects >= 3.11, set FETCHCONTENT_QUIET to FALSE to see progress
+set(FETCHCONTENT_QUIET FALSE) 
+FetchContent_GetProperties(googletest)
+if(NOT googletest_POPULATED)
+  FetchContent_Populate(googletest)
+  add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
+endif()
+
+
+# --- Main Application ---
+# Add the main application executable from the 'app' directory
+add_executable(main_app app/main.cpp)
+
+
+# --- Unit Tests ---
+# Add the test executable from the 'tests' directory
+add_executable(run_tests tests/EventSystem_test.cpp)
+
+# Link the test executable against GTest
+target_link_libraries(run_tests gtest_main)
+
+# Include GTest and add the tests to CTest
+include(GoogleTest)
+gtest_discover_tests(run_tests)

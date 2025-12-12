@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-REM Script to configure, build, and run the CMake project.
+REM Script to configure, build, test, and run the project.
 
 REM Define the name of the build directory.
 SET BUILD_DIR=build
@@ -17,7 +17,7 @@ cd "%BUILD_DIR%"
 
 REM Run CMake to configure the project.
 echo.
-echo [Step 1/3] Configuring project with CMake...
+echo [Step 1/4] Configuring project with CMake...
 cmake ..
 
 REM Check if CMake failed.
@@ -26,9 +26,9 @@ IF %ERRORLEVEL% NEQ 0 (
     goto :error
 )
 
-REM Run CMake to build the project.
+REM Run CMake to build the project (both app and tests).
 echo.
-echo [Step 2/3] Building project...
+echo [Step 2/4] Building project...
 cmake --build .
 
 REM Check if build failed.
@@ -37,16 +37,29 @@ IF %ERRORLEVEL% NEQ 0 (
     goto :error
 )
 
-REM Find and run the executable.
+REM Run the unit tests using CTest.
 echo.
-echo [Step 3/3] Running executable...
+echo [Step 3/4] Running unit tests...
+ctest --output-on-failure
+
+REM Check if tests failed.
+IF %ERRORLEVEL% NEQ 0 (
+    echo Unit tests failed. Aborting run.
+    goto :error
+)
+
+REM Find and run the main application executable.
+echo.
+echo [Step 4/4] Running main application...
 echo ---------------------------------
-IF EXIST "Debug\main.exe" (
-    call "Debug\main.exe"
-) ELSE IF EXIST "Release\main.exe" (
-    call "Release\main.exe"
+IF EXIST "app\Debug\main_app.exe" (
+    call "app\Debug\main_app.exe"
+) ELSE IF EXIST "app\Release\main_app.exe" (
+    call "app\Release\main_app.exe"
+) ELSE IF EXIST "app\main_app.exe" (
+    call "app\main_app.exe"
 ) ELSE (
-    echo Executable 'main.exe' not found in Debug or Release folders.
+    echo Executable 'main_app.exe' not found.
 )
 echo ---------------------------------
 echo.
