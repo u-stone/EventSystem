@@ -129,6 +129,26 @@ public:
         }
     }
 
+    // Unregisters all handlers (both class-based and callback-based) for a specific event type.
+    template<typename TEvent>
+    void unregisterAllHandlers() {
+        std::type_index eventType = std::type_index(typeid(TEvent));
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        // 1. Clear callback handlers for this event type
+        auto it_cb = m_callbackHandlers.find(eventType);
+        if (it_cb != m_callbackHandlers.end()) {
+            // Also remove the corresponding entries from the reverse map
+            for (const auto& [handle, func] : it_cb->second) {
+                m_handleToEventTypeMap.erase(handle);
+            }
+            m_callbackHandlers.erase(it_cb);
+        }
+
+        // 2. Clear interface handlers for this event type
+        m_interfaceHandlers.erase(eventType);
+    }
+
     // --- Event Posting ---
 
     template<typename TEvent>
