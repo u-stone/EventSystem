@@ -87,7 +87,7 @@ int main() {
     std::cout << "  - Unregistering callback via its handle." << std::endl;
     EventCenter::instance().unregisterHandler(cb_handle);
     publish_event(SimpleMessageEvent{"!!! THIS SHOULD NOT BE SEEN !!!"});
-    
+
 
     // ===================================================================================
     // STEP 4: Static Handler Registration (Self-contained event & handler)
