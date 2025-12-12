@@ -14,6 +14,9 @@
 #include <queue>
 #include <atomic>
 
+// A unique identifier for a callback subscription, used for unregistering.
+using SubscriptionHandle = size_t;
+
 //----------------------------------------------------------------
 // Base class for all event handlers.
 //
@@ -47,7 +50,7 @@ public:
 
 //----------------------------------------------------------------
 // The EventCenter is a singleton that manages and dispatches events asynchronously.
-// The worker thread is created lazily on the first event post.
+// It supports both class-based (IEventHandler) and function-based (callback) handlers.
 //----------------------------------------------------------------
 class EventCenter {
 public:
@@ -62,59 +65,99 @@ public:
     EventCenter& operator=(const EventCenter&) = delete;
 
     ~EventCenter() {
-        m_done = true;
+        m_done = true; 
         m_condVar.notify_one();
         if (m_workerThread.joinable()) {
             m_workerThread.join();
         }
     }
 
-    // Register a handler for a specific event type. Thread-safe.
+    // --- IEventHandler-based Subscription ---
+
     template<typename TEvent>
     void registerHandler(IEventHandler* handler) {
         std::type_index eventType = std::type_index(typeid(TEvent));
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_handlers[eventType].push_back(handler);
-        std::cout << "Handler registered for event: " << typeid(TEvent).name() << std::endl;
+        m_interfaceHandlers[eventType].push_back(handler);
     }
 
-    // Unregister a handler for a specific event type. Thread-safe.
     template<typename TEvent>
     void unregisterHandler(IEventHandler* handler) {
         std::type_index eventType = std::type_index(typeid(TEvent));
         std::lock_guard<std::mutex> lock(m_mutex);
-        auto it = m_handlers.find(eventType);
-        if (it != m_handlers.end()) {
+        auto it = m_interfaceHandlers.find(eventType);
+        if (it != m_interfaceHandlers.end()) {
             auto& handlers = it->second;
             handlers.erase(std::remove(handlers.begin(), handlers.end(), handler), handlers.end());
-            std::cout << "Handler unregistered for event: " << typeid(TEvent).name() << std::endl;
         }
     }
 
-    // Post an event to the center. This is a non-blocking call.
-    // The worker thread is created on the first call to this method.
+    // --- Callback-based Subscription ---
+
+    template<typename TEvent>
+    SubscriptionHandle registerHandler(std::function<void(const TEvent&)> callback) {
+        std::type_index eventType = std::type_index(typeid(TEvent));
+        SubscriptionHandle handle = m_nextSubscriptionId++;
+
+        // Create a wrapper that casts std::any to the correct event type.
+        auto wrapper = [callback](const std::any& eventData) {
+            if (auto* event = std::any_cast<TEvent>(&eventData)) {
+                callback(*event);
+            }
+        };
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_callbackHandlers[eventType][handle] = wrapper;
+        m_handleToEventTypeMap.emplace(handle, eventType); // For quick unregistering
+        return handle;
+    }
+
+    void unregisterHandler(SubscriptionHandle handle) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_handleToEventTypeMap.find(handle);
+        if (it != m_handleToEventTypeMap.end()) {
+            std::type_index eventType = it->second;
+            m_callbackHandlers[eventType].erase(handle);
+            m_handleToEventTypeMap.erase(it);
+        }
+    }
+
+    // --- Event Posting ---
+
     template<typename TEvent>
     void postEvent(const TEvent& event) {
         std::call_once(m_initFlag, &EventCenter::startWorker, this);
-
         std::type_index eventType = std::type_index(typeid(TEvent));
-
+        
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            auto it = m_handlers.find(eventType);
-            if (it != m_handlers.end()) {
-                auto handlers = it->second; 
+            
+            // 1. Queue tasks for IEventHandler subscribers
+            if (m_interfaceHandlers.count(eventType)) {
+                auto handlers = m_interfaceHandlers.at(eventType); 
                 m_eventQueue.push([handlers, event]() {
                     for (IEventHandler* handler : handlers) {
                         handler->handle(event);
                     }
                 });
             }
+
+            // 2. Queue tasks for callback subscribers
+            if (m_callbackHandlers.count(eventType)) {
+                auto& handlerMap = m_callbackHandlers.at(eventType);
+                for(auto const& [handle, callback] : handlerMap) {
+                    m_eventQueue.push([callback, event](){
+                        callback(event);
+                    });
+                }
+            }
         }
         m_condVar.notify_one();
     }
 
 private:
+    using GenericCallback = std::function<void(const std::any&)>;
+
     // Private constructor for singleton pattern.
     EventCenter() : m_done(false) {}
 
@@ -124,7 +167,7 @@ private:
 
     void processEvents() {
         while (!m_done) {
-            std::function<void()> task;
+            std::vector<std::function<void()>> tasks;
             {
                 std::unique_lock<std::mutex> lock(m_mutex);
                 m_condVar.wait(lock, [this] { return !m_eventQueue.empty() || m_done; });
@@ -132,20 +175,32 @@ private:
                 if (m_done && m_eventQueue.empty()) {
                     return;
                 }
-
-                task = std::move(m_eventQueue.front());
-                m_eventQueue.pop();
+                
+                while(!m_eventQueue.empty()){
+                    tasks.push_back(std::move(m_eventQueue.front()));
+                    m_eventQueue.pop();
+                }
             }
-            // Execute task outside the lock.
-            task();
+            
+            // Execute tasks outside the lock.
+            for(const auto& task : tasks){
+                task();
+            }
         }
     }
 
-    std::map<std::type_index, std::vector<IEventHandler*>> m_handlers;
+    // Storage for IEventHandler-based subscriptions
+    std::map<std::type_index, std::vector<IEventHandler*>> m_interfaceHandlers;
+    
+    // Storage for callback-based subscriptions
+    std::map<std::type_index, std::map<SubscriptionHandle, GenericCallback>> m_callbackHandlers;
+    std::map<SubscriptionHandle, std::type_index> m_handleToEventTypeMap;
+    std::atomic<SubscriptionHandle> m_nextSubscriptionId{0};
+
     std::queue<std::function<void()>> m_eventQueue;
     std::mutex m_mutex;
     std::condition_variable m_condVar;
-
+    
     std::thread m_workerThread;
     std::atomic<bool> m_done;
     std::once_flag m_initFlag;
@@ -153,11 +208,23 @@ private:
 
 //----------------------------------------------------------------
 // Helper "Tool" function to publish an event from anywhere.
-// This provides a convenient fire-and-forget mechanism.
+//
+// This is the primary way to send events into the system. It offers
+// a "fire-and-forget" mechanism. The function call is non-blocking
+// and returns immediately, while the event is queued for asynchronous
+// processing by the EventCenter's worker thread.
+//
+// Usage:
+//
+//   struct PlayerScoreChangeEvent { int newScore; };
+//
+//   void updatePlayerScore(int score) {
+//       // Simply call publish_event from anywhere in the code.
+//       publish_event(PlayerScoreChangeEvent{score});
+//   }
+//
 //----------------------------------------------------------------
 template<typename TEvent>
 void publish_event(const TEvent& event) {
-    // Optional: add a log to know where event was published from.
-    // std::cout << "Publishing event: " << typeid(TEvent).name() << std::endl;
     EventCenter::instance().postEvent(event);
 }
