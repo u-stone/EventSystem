@@ -52,12 +52,12 @@ REM Find and run the main application executable.
 echo.
 echo [Step 4/4] Running main application...
 echo ---------------------------------
-IF EXIST "build\Debug\main_app.exe" (
-    call "build\Debug\main_app.exe"
-) ELSE IF EXIST "build\Release\main_app.exe" (
-    call "build\Release\main_app.exe"
-) ELSE IF EXIST "build\main_app.exe" (
-    call "build\main_app.exe"
+IF EXIST "Debug\main_app.exe" (
+    call "Debug\main_app.exe"
+) ELSE IF EXIST "Release\main_app.exe" (
+    call "Release\main_app.exe"
+) ELSE IF EXIST "main_app.exe" (
+    call "main_app.exe"
 ) ELSE (
     echo Executable 'main_app.exe' not found.
 )
