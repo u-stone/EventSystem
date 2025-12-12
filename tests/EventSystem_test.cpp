@@ -189,3 +189,96 @@ TEST(EventSystemTest, UnregisterAll) {
     StaticEvent::sync_ptr = nullptr;
     EventCenter::instance().unregisterAllHandlers<StaticEvent>();
 }
+
+// --- Tests for Timed Events ---
+
+TEST(EventSystemTest, DelayedEventIsProcessedAfterDelay) {
+    TestSync sync;
+    const auto delay = std::chrono::milliseconds(200);
+    
+    std::atomic<std::chrono::steady_clock::time_point> handled_at;
+
+    EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1& event) {
+        handled_at = std::chrono::steady_clock::now();
+        sync.notify();
+    });
+
+    auto start_time = std::chrono::steady_clock::now();
+    publish_event_delayed(TestEvent1{100}, delay);
+
+    // Wait for the event to be handled
+    EXPECT_TRUE(sync.waitFor(delay + std::chrono::milliseconds(100)));
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(handled_at.load() - start_time);
+    
+    // Check if the elapsed time is roughly equal to the delay.
+    // Allow a small margin for scheduling and execution overhead.
+    EXPECT_GE(elapsed.count(), delay.count());
+    EXPECT_LT(elapsed.count(), delay.count() + 50); // Allow 50ms overhead
+
+    // Clean up
+    EventCenter::instance().unregisterAllHandlers<TestEvent1>();
+}
+
+TEST(EventSystemTest, EventsAreProcessedInTemporalOrder) {
+    TestSync sync1, sync2, sync3;
+    std::vector<int> received_order;
+    std::mutex vector_mutex;
+
+    // Handler that records the order of events received
+    auto handler = [&](const TestEvent1& event) {
+        std::lock_guard<std::mutex> lock(vector_mutex);
+        received_order.push_back(event.value);
+        if (event.value == 1) sync1.notify();
+        else if (event.value == 2) sync2.notify();
+        else if (event.value == 3) sync3.notify();
+    };
+
+    auto handle = EventCenter::instance().registerHandler<TestEvent1>(handler);
+
+    auto now = std::chrono::steady_clock::now();
+
+    // Publish events out of order with different delays
+    publish_event_at(TestEvent1{3}, now + std::chrono::milliseconds(300)); // Last
+    publish_event_at(TestEvent1{1}, now + std::chrono::milliseconds(100)); // First
+    publish_event_at(TestEvent1{2}, now + std::chrono::milliseconds(200)); // Second
+
+    // Wait for all events to be processed
+    EXPECT_TRUE(sync1.waitFor(std::chrono::milliseconds(200)));
+    EXPECT_TRUE(sync2.waitFor(std::chrono::milliseconds(200)));
+    EXPECT_TRUE(sync3.waitFor(std::chrono::milliseconds(200)));
+
+    // Verify the received order
+    ASSERT_EQ(received_order.size(), 3);
+    EXPECT_EQ(received_order[0], 1);
+    EXPECT_EQ(received_order[1], 2);
+    EXPECT_EQ(received_order[2], 3);
+
+    // Clean up
+    EventCenter::instance().unregisterHandler(handle);
+}
+
+TEST(EventSystemTest, ScheduledEventIsProcessedAtTime) {
+    TestSync sync;
+    const auto scheduled_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    std::atomic<std::chrono::steady_clock::time_point> handled_at;
+
+    EventCenter::instance().registerHandler<TestEvent2>([&](const TestEvent2& event) {
+        handled_at = std::chrono::steady_clock::now();
+        sync.notify();
+    });
+
+    publish_event_at(TestEvent2{"scheduled"}, scheduled_time);
+
+    EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(350)));
+
+    auto time_diff = std::chrono::duration_cast<std::chrono::milliseconds>(handled_at.load() - scheduled_time);
+
+    // The event should be handled at or just after the scheduled time.
+    // It shouldn't be handled before.
+    EXPECT_GE(time_diff.count(), 0);
+    EXPECT_LT(time_diff.count(), 50); // Allow 50ms overhead
+
+    // Clean up
+    EventCenter::instance().unregisterAllHandlers<TestEvent2>();
+}
