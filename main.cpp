@@ -33,8 +33,9 @@ int main() {
 
     // --- Part 1: Register a traditional IEventHandler class ---
     std::cout << "\n[1] Registering a class-based handler for LegacyEvent..." << std::endl;
-    LegacyHandler legacyHandler;
-    EventCenter::instance().registerHandler<LegacyEvent>(&legacyHandler);
+    // Handlers must now be created as shared_ptr to be managed automatically.
+    auto legacyHandler = std::make_shared<LegacyHandler>();
+    EventCenter::instance().registerHandler<LegacyEvent>(legacyHandler);
 
 
     // --- Part 2: Register a lightweight callback (lambda) handler ---
