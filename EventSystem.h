@@ -72,17 +72,18 @@ public:
         }
     }
 
-    // --- IEventHandler-based Subscription (using smart pointers) ---
+    // --- IEventHandler-based Subscription (using shared_ptr for automatic lifetime management) ---
 
-    // Registers a handler. The handler must be passed as a std::shared_ptr.
+    // Registers a handler. The EventCenter will share ownership of the handler,
+    // keeping it alive until it is unregistered. This allows for "fire-and-forget" registration.
     template<typename TEvent>
     void registerHandler(const std::shared_ptr<IEventHandler>& handler) {
         std::type_index eventType = std::type_index(typeid(TEvent));
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_interfaceHandlers[eventType].push_back(handler); // Store as weak_ptr
+        m_interfaceHandlers[eventType].push_back(handler);
     }
 
-    // Unregisters a handler.
+    // Unregisters a handler, releasing the EventCenter's ownership.
     template<typename TEvent>
     void unregisterHandler(const std::shared_ptr<IEventHandler>& handler) {
         std::type_index eventType = std::type_index(typeid(TEvent));
@@ -90,11 +91,8 @@ public:
         auto it = m_interfaceHandlers.find(eventType);
         if (it != m_interfaceHandlers.end()) {
             auto& handlers = it->second;
-            // Erase the handler if it's the one we are looking for, or if it has expired.
-            handlers.erase(std::remove_if(handlers.begin(), handlers.end(),
-                [&handler](const std::weak_ptr<IEventHandler>& weak) {
-                    return weak.expired() || weak.lock() == handler;
-                }), handlers.end());
+            // std::remove uses operator== on the shared_ptrs to find the correct one.
+            handlers.erase(std::remove(handlers.begin(), handlers.end(), handler), handlers.end());
         }
     }
 
@@ -161,14 +159,11 @@ public:
             
             // 1. Queue tasks for IEventHandler subscribers
             if (m_interfaceHandlers.count(eventType)) {
-                auto weak_handlers = m_interfaceHandlers.at(eventType); 
-                m_eventQueue.push([weak_handlers, event]() {
-                    for (const auto& weak_handler : weak_handlers) {
-                        // Lock the weak_ptr to get a shared_ptr.
-                        if (auto shared_handler = weak_handler.lock()) {
-                            // If successful, call the handler.
-                            shared_handler->handle(event);
-                        }
+                auto handlers = m_interfaceHandlers.at(eventType); 
+                m_eventQueue.push([handlers, event]() {
+                    for (const auto& handler : handlers) {
+                        // No need to lock, just use the shared_ptr directly.
+                        handler->handle(event);
                     }
                 });
             }
@@ -220,8 +215,8 @@ private:
         }
     }
 
-    // Storage for IEventHandler-based subscriptions (now using weak_ptr for safety)
-    std::map<std::type_index, std::vector<std::weak_ptr<IEventHandler>>> m_interfaceHandlers;
+    // Storage for IEventHandler-based subscriptions (now using shared_ptr to manage lifetime)
+    std::map<std::type_index, std::vector<std::shared_ptr<IEventHandler>>> m_interfaceHandlers;
     
     // Storage for callback-based subscriptions
     std::map<std::type_index, std::map<SubscriptionHandle, GenericCallback>> m_callbackHandlers;
