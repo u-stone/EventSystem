@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <queue>
 #include <atomic>
+#include <chrono>
 
 // A unique identifier for a callback subscription, used for unregistering.
 using SubscriptionHandle = size_t;
@@ -185,55 +186,45 @@ public:
 
 	// --- Event Posting ---
 
+	// Publishes an event for immediate asynchronous processing.
 	template <typename TEvent>
-	void postEvent(const TEvent& event)
+	void publish_event(const TEvent& event)
+	{
+		publish_event_at(event, std::chrono::steady_clock::now());
+	}
+
+	// Publishes an event to be processed after a specified delay.
+	template <typename TEvent>
+	void publish_event_delayed(const TEvent& event, std::chrono::milliseconds delay)
+	{
+		publish_event_at(event, std::chrono::steady_clock::now() + delay);
+	}
+
+	// Publishes an event to be processed at a specific time point.
+	template <typename TEvent>
+	void publish_event_at(const TEvent& event, const std::chrono::steady_clock::time_point& timePoint)
 	{
 		std::call_once(m_initFlag, &EventCenter::startWorker, this);
-		std::type_index eventType = std::type_index(typeid(TEvent));
-
 		{
-			std::unique_lock<std::mutex> lock(m_mutex);
-
-			// 1. Queue tasks for IEventHandler subscribers
-			if (m_interfaceHandlers.count(eventType))
-			{
-				const auto& handlerGroup = m_interfaceHandlers.at(eventType);
-				auto strong_handlers = handlerGroup.strongRefs;
-				auto weak_handlers = handlerGroup.weakRefs;
-
-				m_eventQueue.push([strong_handlers, weak_handlers, event]() {
-					// Call strong-referenced handlers
-					for (const auto& handler : strong_handlers)
-					{
-						handler->handle(event);
-					}
-					// Call weak-referenced handlers
-					for (const auto& weak_handler : weak_handlers)
-					{
-						if (auto handler = weak_handler.lock())
-						{
-							handler->handle(event);
-						}
-					}
-				});
-			}
-
-			// 2. Queue tasks for callback subscribers
-			if (m_callbackHandlers.count(eventType))
-			{
-				auto& handlerMap = m_callbackHandlers.at(eventType);
-				for (auto const& [handle, callback] : handlerMap)
-				{
-					m_eventQueue.push([callback, event]() {
-						callback(event);
-					});
-				}
-			}
+			std::lock_guard<std::mutex> lock(m_mutex);
+			m_pendingEvents.push_back({ timePoint, event, std::type_index(typeid(TEvent)) });
 		}
 		m_condVar.notify_one();
 	}
 
 private:
+	// Internal struct to hold event data along with its scheduled execution time.
+	struct ScheduledEvent {
+		std::chrono::steady_clock::time_point executionTime;
+		std::any eventData;
+		std::type_index eventType;
+
+		// Comparison for the priority queue to make it a min-heap.
+		bool operator>(const ScheduledEvent& other) const {
+			return executionTime > other.executionTime;
+		}
+	};
+
 	// Holds both strong and weak references for interface-based handlers
 	struct InterfaceHandlers
 	{
@@ -255,32 +246,97 @@ private:
 
 	void processEvents()
 	{
-		while (!m_done)
+		// 本地优先队列，仅由工作线程访问，无需加锁
+		std::priority_queue<ScheduledEvent, std::vector<ScheduledEvent>, std::greater<ScheduledEvent>> localEventQueue;
+
+		while (true)
 		{
-			std::vector<std::function<void()>> tasks;
+			std::vector<ScheduledEvent> eventsToDispatch;
+			std::vector<ScheduledEvent> newEvents;
+
 			{
 				std::unique_lock<std::mutex> lock(m_mutex);
-				m_condVar.wait(lock, [this] {
-					return !m_eventQueue.empty() || m_done;
-				});
 
-				if (m_done && m_eventQueue.empty())
-				{
+				// 如果本地没有待处理的定时事件，则等待新事件或退出信号
+				if (localEventQueue.empty()) {
+					m_condVar.wait(lock, [this] { return m_done || !m_pendingEvents.empty(); });
+				}
+				else {
+					// 如果有本地定时事件，等待直到最早的事件到期，或者有新事件加入
+					auto nextTime = localEventQueue.top().executionTime;
+					m_condVar.wait_until(lock, nextTime, [this] { return m_done || !m_pendingEvents.empty(); });
+				}
+
+				if (m_done && m_pendingEvents.empty() && localEventQueue.empty()) {
 					return;
 				}
 
-				while (!m_eventQueue.empty())
-				{
-					tasks.push_back(std::move(m_eventQueue.front()));
-					m_eventQueue.pop();
+				// 快速交换：将外部提交的事件“偷”到本地变量，极大减少持锁时间
+				if (!m_pendingEvents.empty()) {
+					newEvents.swap(m_pendingEvents);
 				}
+			} // Lock is released here.
+
+			// 在锁外将新事件合并到本地优先队列
+			for (const auto& evt : newEvents) {
+				localEventQueue.push(evt);
 			}
 
-			// Execute tasks outside the lock.
-			for (const auto& task : tasks)
-			{
-				task();
+			// 检查并提取已到期的事件
+			auto now = std::chrono::steady_clock::now();
+			while (!localEventQueue.empty() && localEventQueue.top().executionTime <= now) {
+				eventsToDispatch.push_back(localEventQueue.top());
+				localEventQueue.pop();
 			}
+
+			// 如果正在关闭且没有立即需要处理的任务，退出（防止因存在未来事件而忙等待）
+			if (m_done && eventsToDispatch.empty() && newEvents.empty()) {
+				return;
+			}
+
+			for (const auto& scheduledEvent : eventsToDispatch) {
+				dispatchEvent(scheduledEvent.eventData, scheduledEvent.eventType);
+			}
+		}
+	}
+
+	void dispatchEvent(const std::any& eventData, const std::type_index& eventType)
+	{
+		// Temporary handler lists to avoid holding the lock during callbacks.
+		std::vector<std::shared_ptr<IEventHandler>> strong_handlers;
+		std::vector<std::weak_ptr<IEventHandler>> weak_handlers;
+		std::vector<GenericCallback> callbacks;
+
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+
+			// 1. Collect IEventHandler subscribers
+			auto it_ih = m_interfaceHandlers.find(eventType);
+			if (it_ih != m_interfaceHandlers.end()) {
+				strong_handlers = it_ih->second.strongRefs; // Copy
+				weak_handlers = it_ih->second.weakRefs;   // Copy
+			}
+
+			// 2. Collect callback subscribers
+			auto it_cb = m_callbackHandlers.find(eventType);
+			if (it_cb != m_callbackHandlers.end()) {
+				for (const auto& pair : it_cb->second) {
+					callbacks.push_back(pair.second);
+				}
+			}
+		}
+
+		// Execute handlers outside the lock.
+		for (const auto& handler : strong_handlers) {
+			handler->handle(eventData);
+		}
+		for (const auto& weak_handler : weak_handlers) {
+			if (auto handler = weak_handler.lock()) {
+				handler->handle(eventData);
+			}
+		}
+		for (const auto& callback : callbacks) {
+			callback(eventData);
 		}
 	}
 
@@ -292,7 +348,8 @@ private:
 	std::map<SubscriptionHandle, std::type_index> m_handleToEventTypeMap;
 	std::atomic<SubscriptionHandle> m_nextSubscriptionId{ 0 };
 
-	std::queue<std::function<void()>> m_eventQueue;
+	// 接收新事件的缓冲区（Pending Queue）
+	std::vector<ScheduledEvent> m_pendingEvents;
 	std::mutex m_mutex;
 	std::condition_variable m_condVar;
 
@@ -302,27 +359,32 @@ private:
 };
 
 //----------------------------------------------------------------
-// Helper "Tool" function to publish an event from anywhere.
+// Helper "Tool" functions to publish events from anywhere.
 //
-// This is the primary way to send events into the system. It offers
-// a "fire-and-forget" mechanism. The function call is non-blocking
-// and returns immediately, while the event is queued for asynchronous
+// These are the primary way to send events into the system. They offer
+// a "fire-and-forget" mechanism. The function calls are non-blocking
+// and return immediately, while the event is queued for asynchronous
 // processing by the EventCenter's worker thread.
-//
-// Usage:
-//
-//   struct PlayerScoreChangeEvent { int newScore; };
-//
-//   void updatePlayerScore(int score) {
-//       // Simply call publish_event from anywhere in the code.
-//       publish_event(PlayerScoreChangeEvent{score});
-//   }
-//
 //----------------------------------------------------------------
+
+// Publishes an event for immediate asynchronous processing.
 template<typename TEvent>
 void publish_event(const TEvent& event) {
-    EventCenter::instance().postEvent(event);
+    EventCenter::instance().publish_event(event);
 }
+
+// Publishes an event to be processed after a specified delay.
+template<typename TEvent>
+void publish_event_delayed(const TEvent& event, std::chrono::milliseconds delay) {
+	EventCenter::instance().publish_event_delayed(event, delay);
+}
+
+// Publishes an event to be processed at a specific time point.
+template<typename TEvent>
+void publish_event_at(const TEvent& event, const std::chrono::steady_clock::time_point& timePoint) {
+	EventCenter::instance().publish_event_at(event, timePoint);
+}
+
 
 //----------------------------------------------------------------
 // Helper "Tool" function for self-registering stateless events.
