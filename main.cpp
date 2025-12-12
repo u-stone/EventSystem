@@ -109,6 +109,59 @@ int main()
 
     publish_event(BroadcastEvent{"!!! THIS SHOULD NOT BE SEEN !!!"});
 
+    // --- Part 7: "Fire-and-forget" registration demonstration ---
+
+    std::cout << "\n[7] Demonstrating 'fire-and-forget' registration..." << std::endl;
+
+    struct OneShotEvent
+    {
+    };
+
+    class FireAndForgetHandler : public IEventHandler
+    {
+
+    public:
+        void handle(const std::any &eventData) override
+        {
+
+            if (std::any_cast<OneShotEvent>(&eventData))
+            {
+
+                std::cout << "    -> [FireAndForgetHandler] Received the OneShotEvent. I'm alive!" << std::endl;
+            }
+        }
+
+        ~FireAndForgetHandler()
+        {
+
+            std::cout << "    -> [FireAndForgetHandler] I am being destroyed now." << std::endl;
+        }
+    };
+
+    std::cout << "    Registering a handler using a temporary shared_ptr..." << std::endl;
+
+    // This is now safe. The EventCenter will keep the handler alive.
+
+    EventCenter::instance().registerHandler<OneShotEvent>(
+
+        std::make_shared<FireAndForgetHandler>()
+
+    );
+
+    std::cout << "    Publishing OneShotEvent..." << std::endl;
+
+    publish_event(OneShotEvent{});
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::cout << "    Handler is kept alive by EventCenter. Now unregistering to release it..." << std::endl;
+
+    // If we don't unregister, the handler will leak, as EventCenter holds a shared_ptr to it.
+
+    EventCenter::instance().unregisterAllHandlers<OneShotEvent>();
+
+    std::cout << "    (Destructor for FireAndForgetHandler should be called right after this)." << std::endl;
+
     // --- Finalization ---
 
     std::cout << "\nWaiting for final events to be processed..." << std::endl;
