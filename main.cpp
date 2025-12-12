@@ -89,6 +89,30 @@ int main() {
     publish_event(SimpleMessageEvent{"!!! THIS SHOULD NOT BE SEEN !!!"});
     
 
+    // ===================================================================================
+    // STEP 4: Static Handler Registration (Self-contained event & handler)
+    // ===================================================================================
+    std::cout << "\n[4] DEMO: Static handler registration for stateless logic." << std::endl;
+    // This struct contains its own handler as a static method.
+    struct SelfHandledEvent {
+        const char* text;
+        static void handle(const SelfHandledEvent& event) {
+            std::cout << "    -> [Static Handler] Received SelfHandledEvent with text: '" << event.text << "'" << std::endl;
+        }
+    };
+
+    std::cout << "  - Registering event's static handle method with one call." << std::endl;
+    auto static_handle = registerStaticEventHandler<SelfHandledEvent>();
+
+    std::cout << "  - Publishing SelfHandledEvent." << std::endl;
+    publish_event(SelfHandledEvent{"This is very convenient!"});
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::cout << "  - Unregistering static handler via its handle." << std::endl;
+    EventCenter::instance().unregisterHandler(static_handle);
+    publish_event(SelfHandledEvent{"!!! THIS SHOULD NOT BE SEEN !!!"});
+
+
     // --- Finalization ---
     std::cout << "\n--- Demo Finished ---" << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

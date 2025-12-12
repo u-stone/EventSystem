@@ -319,8 +319,29 @@ private:
 //   }
 //
 //----------------------------------------------------------------
-template <typename TEvent>
-void publish_event(const TEvent& event)
-{
-	EventCenter::instance().postEvent(event);
+template<typename TEvent>
+void publish_event(const TEvent& event) {
+    EventCenter::instance().postEvent(event);
+}
+
+//----------------------------------------------------------------
+// Helper "Tool" function for self-registering stateless events.
+//
+// This provides an elegant pattern for simple, stateless handlers.
+// Define a static `handle` method inside your event struct, and this
+// function will automatically register it as the handler.
+//
+// Usage:
+//
+//   struct MyStatelessEvent {
+//       static void handle(const MyStatelessEvent& event) { /*...*/ }
+//   };
+//
+//   registerStaticEventHandler<MyStatelessEvent>();
+//
+//----------------------------------------------------------------
+template<typename TEvent>
+SubscriptionHandle registerStaticEventHandler() {
+    // Creates a std::function from the static handle method and registers it.
+    return EventCenter::instance().registerHandler<TEvent>(&TEvent::handle);
 }
