@@ -272,3 +272,31 @@ TEST(EventSystemTest, ScheduledEventIsProcessedAtTime) {
     // Clean up
     EventCenter::instance().unregisterAllHandlers<TestEvent2>();
 }
+
+TEST(EventSystemTest, CancelAllEvents) {
+    TestSync sync;
+    std::atomic<bool> received{false};
+
+    auto handle = EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1&) {
+        received = true;
+        sync.notify();
+    });
+
+    // 1. Publish a delayed event
+    publish_event_delayed(TestEvent1{999}, std::chrono::milliseconds(200));
+
+    // 2. Cancel all events immediately
+    cancelAllEvents();
+
+    // 3. Wait longer than the delay to ensure it didn't fire
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_FALSE(received);
+    EXPECT_FALSE(sync.notified);
+
+    // 4. Verify the system is still operational
+    publish_event(TestEvent1{123});
+    EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
+    EXPECT_TRUE(received);
+
+    EventCenter::instance().unregisterHandler(handle);
+}
