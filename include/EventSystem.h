@@ -346,32 +346,49 @@ private:
             }
         }
 
-        // Execute handlers outside the lock.
-        try
+        // Helper lambda to execute handlers safely with exception isolation and timing checks.
+        auto safeInvoke = [&](const auto &action, const char *typeLabel)
         {
-            for (const auto &handler : strong_handlers)
+            try
             {
-                handler->handle(eventData);
-            }
-            for (const auto &weak_handler : weak_handlers)
-            {
-                if (auto handler = weak_handler.lock())
+                auto start = std::chrono::steady_clock::now();
+                action();
+                auto end = std::chrono::steady_clock::now();
+
+                // Simple heuristic: if a handler takes > 500ms, warn about it.
+                // This helps identify potential deadlocks or performance bottlenecks.
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+                if (duration.count() > 500)
                 {
-                    handler->handle(eventData);
+                    std::cerr << "[EventSystem] Warning: " << typeLabel << " took " << duration.count()
+                              << "ms to execute. Check for slow code or infinite loops." << std::endl;
                 }
             }
-            for (const auto &callback : callbacks)
+            catch (const std::exception &e)
             {
-                callback(eventData);
+                std::cerr << "[EventSystem] Exception in " << typeLabel << ": " << e.what() << std::endl;
+            }
+            catch (...)
+            {
+                std::cerr << "[EventSystem] Unknown exception in " << typeLabel << "." << std::endl;
+            }
+        };
+
+        // Execute handlers outside the lock.
+        for (const auto &handler : strong_handlers)
+        {
+            safeInvoke([&]() { handler->handle(eventData); }, "StrongHandler");
+        }
+        for (const auto &weak_handler : weak_handlers)
+        {
+            if (auto handler = weak_handler.lock())
+            {
+                safeInvoke([&]() { handler->handle(eventData); }, "WeakHandler");
             }
         }
-        catch (const std::exception &e)
+        for (const auto &callback : callbacks)
         {
-            std::cerr << "Exception during event dispatch: " << e.what() << std::endl;
-        }
-        catch (...)
-        {
-            std::cerr << "Unknown exception during event dispatch." << std::endl;
+            safeInvoke([&]() { callback(eventData); }, "CallbackHandler");
         }
     }
 
