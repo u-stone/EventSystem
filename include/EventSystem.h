@@ -218,6 +218,15 @@ public:
         m_condVar.notify_one();
     }
 
+    // Cancels all pending and scheduled events that haven't been dispatched yet.
+    // This clears both the immediate pending queue and the future scheduled queue.
+    void cancelAllEvents()
+    {
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        m_pendingEvents.clear();
+        m_scheduledQueue = {}; // Clear the priority queue
+    }
+
 private:
     // Internal struct to hold event data along with its scheduled execution time.
     struct ScheduledEvent
@@ -255,61 +264,51 @@ private:
 
     void processEvents()
     {
-        // Local priority queue, accessed only by the worker thread, no locking required.
-        std::priority_queue<ScheduledEvent, std::vector<ScheduledEvent>, std::greater<ScheduledEvent>> localEventQueue;
-
         while (true)
         {
             std::vector<ScheduledEvent> eventsToDispatch;
-            std::vector<ScheduledEvent> newEvents;
 
             {
                 std::unique_lock<std::mutex> lock(m_queueMutex);
 
-                // If there are no pending scheduled events locally, wait for new events or exit signal.
-                if (localEventQueue.empty())
+                // 1. Move pending events to the scheduled queue
+                if (!m_pendingEvents.empty())
                 {
-                    m_condVar.wait(lock, [this]
-                                   { return m_done || !m_pendingEvents.empty(); });
+                    for (auto &evt : m_pendingEvents)
+                    {
+                        m_scheduledQueue.push(std::move(evt));
+                    }
+                    m_pendingEvents.clear();
+                }
+
+                // 2. Wait logic
+                if (m_scheduledQueue.empty())
+                {
+                    m_condVar.wait(lock, [this] { return m_done || !m_pendingEvents.empty(); });
                 }
                 else
                 {
-                    // If there are local scheduled events, wait until the earliest event expires or a new event is added.
-                    auto nextTime = localEventQueue.top().executionTime;
-                    m_condVar.wait_until(lock, nextTime, [this]
-                                         { return m_done || !m_pendingEvents.empty(); });
+                    m_condVar.wait_until(lock, m_scheduledQueue.top().executionTime, [this] { return m_done || !m_pendingEvents.empty(); });
                 }
 
-                if (m_done && m_pendingEvents.empty() && localEventQueue.empty())
+                if (m_done && m_pendingEvents.empty() && m_scheduledQueue.empty())
                 {
                     return;
                 }
 
-                // Fast swap: "Steal" externally submitted events to a local variable, minimizing lock holding time.
+                // If we woke up due to new pending events, loop back to merge them first
                 if (!m_pendingEvents.empty())
                 {
-                    newEvents.swap(m_pendingEvents);
+                    continue;
                 }
-            } // Lock is released here.
 
-            // Merge new events into the local priority queue outside the lock.
-            for (const auto &evt : newEvents)
-            {
-                localEventQueue.push(evt);
-            }
-
-            // Check and extract expired events.
-            auto now = std::chrono::steady_clock::now();
-            while (!localEventQueue.empty() && localEventQueue.top().executionTime <= now)
-            {
-                eventsToDispatch.push_back(localEventQueue.top());
-                localEventQueue.pop();
-            }
-
-            // If shutting down and no immediate tasks, exit (prevent busy waiting due to future events).
-            if (m_done && eventsToDispatch.empty() && newEvents.empty())
-            {
-                return;
+                // 3. Extract all ready events
+                auto now = std::chrono::steady_clock::now();
+                while (!m_scheduledQueue.empty() && m_scheduledQueue.top().executionTime <= now)
+                {
+                    eventsToDispatch.push_back(m_scheduledQueue.top());
+                    m_scheduledQueue.pop();
+                }
             }
 
             for (const auto &scheduledEvent : eventsToDispatch)
@@ -387,6 +386,7 @@ private:
 
     // Buffer for receiving new events (Pending Queue).
     std::vector<ScheduledEvent> m_pendingEvents;
+    std::priority_queue<ScheduledEvent, std::vector<ScheduledEvent>, std::greater<ScheduledEvent>> m_scheduledQueue;
     std::mutex m_queueMutex;
     std::mutex m_registryMutex;
     std::condition_variable m_condVar;
@@ -424,6 +424,12 @@ template <typename TEvent>
 void publish_event_at(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
 {
     EventCenter::instance().publish_event_at(event, timePoint);
+}
+
+// Cancels all pending and scheduled events.
+inline void cancelAllEvents()
+{
+    EventCenter::instance().cancelAllEvents();
 }
 
 //----------------------------------------------------------------
