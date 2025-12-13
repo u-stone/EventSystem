@@ -18,35 +18,68 @@ cd "%BUILD_DIR%"
 REM Run CMake to configure the project.
 echo.
 echo [Step 1/4] Configuring project with CMake...
-cmake -G "Visual Studio 16 2019" ..
+
+REM Detect Visual Studio version
+set "VS_GENERATOR="
+
+REM Check for Visual Studio 2022
+"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -version "[17.0,18.0)" -property installationPath > nul 2> nul
+if %errorlevel% == 0 (
+    echo Found Visual Studio 2022.
+    set "VS_GENERATOR=Visual Studio 17 2022"
+) else (
+    REM Check for Visual Studio 2019
+    "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -version "[16.0,17.0)" -property installationPath > nul 2> nul
+    if %errorlevel% == 0 (
+        echo Found Visual Studio 2019.
+        set "VS_GENERATOR=Visual Studio 16 2019"
+    ) else (
+        REM Check for Visual Studio 2017
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -version "[15.0,16.0)" -property installationPath > nul 2> nul
+        if %errorlevel% == 0 (
+            echo Found Visual Studio 2017.
+            set "VS_GENERATOR=Visual Studio 15 2017"
+        )
+    )
+)
+
+if not defined VS_GENERATOR (
+    echo Neither Visual Studio 2022, 2019, nor 2017 were found by vswhere.
+    goto :error
+)
+
+cmake -G "%VS_GENERATOR%" ..
 
 REM Check if CMake failed.
 IF %ERRORLEVEL% NEQ 0 (
     echo CMake configuration failed.
+    echo If you see an error about existing project files, try deleting the '%BUILD_DIR%' directory.
     goto :error
 )
 
 REM Run CMake to build the project (both app and tests).
 echo.
 echo [Step 2/4] Building project...
-cmake --build .
 
-REM Check if build failed.
+echo Building main application...
+cmake --build . --config Debug --target main_app
+IF %ERRORLEVEL% NEQ 0 goto :error
+
+echo Building unit tests...
+cmake --build . --config Debug --target test_event_system
+IF %ERRORLEVEL% NEQ 0 goto :error
+
+
+REM Run the unit tests using CTest.
+echo.
+echo [Step 3/4] Running unit tests...
+ctest -C Debug --output-on-failure
+
+REM Check if tests failed.
 IF %ERRORLEVEL% NEQ 0 (
-    echo Project build failed.
+    echo Unit tests failed. Aborting run.
     goto :error
 )
-
-@REM REM Run the unit tests using CTest.
-@REM echo.
-@REM echo [Step 3/4] Running unit tests...
-@REM ctest --output-on-failure
-
-@REM REM Check if tests failed.
-@REM IF %ERRORLEVEL% NEQ 0 (
-@REM     echo Unit tests failed. Aborting run.
-@REM     goto :error
-@REM )
 
 REM Find and run the main application executable.
 echo.
