@@ -15,6 +15,9 @@ include_directories(include)
 # Enable testing for the project. Must be called before adding tests.
 enable_testing()
 
+# Force Google Test to use shared CRT (MD/MDd) to match the application
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+
 # Use FetchContent to download Google Test automatically if not found.
 # We set FETCHCONTENT_BASE_DIR to a directory outside the build tree to cache
 # the download, avoiding re-downloads on every clean build.
@@ -39,13 +42,12 @@ endif()
 add_executable(main_app app/main.cpp)
 
 
-# # --- Unit Tests ---
-# # Add the test executable from the 'tests' directory
-# add_executable(run_tests tests/EventSystem_test.cpp)
+# --- Unit Tests ---
+# Add the test executable from the 'test' directory
+add_executable(test_event_system tests/EventSystem_test.cpp)
 
-# # Link the test executable against GTest
-# target_link_libraries(run_tests gtest_main)
+# Link the test executable against GTest
+target_link_libraries(test_event_system GTest::gtest_main)
 
-# # Manually add the test to CTest. Using a generator expression for the COMMAND
-# # is the most robust way to ensure CTest finds the executable.
-# add_test(NAME EventSystemTests COMMAND $<TARGET_FILE:run_tests>)
+include(GoogleTest)
+gtest_discover_tests(test_event_system)
