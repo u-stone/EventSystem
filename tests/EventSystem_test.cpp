@@ -300,3 +300,23 @@ TEST(EventSystemTest, CancelAllEvents) {
 
     EventCenter::instance().unregisterHandler(handle);
 }
+
+TEST(EventSystemTest, ExceptionIsolation) {
+    TestSync sync;
+    
+    // 1. Register a handler that throws an exception
+    EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1&) {
+        throw std::runtime_error("Intentional crash for testing");
+    });
+
+    // 2. Register a second handler that should still run
+    EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1&) {
+        sync.notify();
+    });
+
+    // 3. Publish event. The first handler will crash, but the second should succeed.
+    publish_event(TestEvent1{1});
+    EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
+
+    EventCenter::instance().unregisterAllHandlers<TestEvent1>();
+}
