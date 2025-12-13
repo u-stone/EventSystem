@@ -14,6 +14,7 @@
 #include <queue>
 #include <atomic>
 #include <chrono>
+#include <utility>
 
 // A unique identifier for a callback subscription, used for unregistering.
 using SubscriptionHandle = size_t;
@@ -205,9 +206,14 @@ public:
     void publish_event_at(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
     {
         std::call_once(m_initFlag, &EventCenter::startWorker, this);
+
+        // Optimization: Construct the event wrapper outside the lock.
+        // This ensures that copying the event data (into std::any) doesn't block the queue.
+        ScheduledEvent newEvent{timePoint, event, std::type_index(typeid(TEvent))};
+
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
-            m_pendingEvents.push_back({timePoint, event, std::type_index(typeid(TEvent))});
+            m_pendingEvents.push_back(std::move(newEvent));
         }
         m_condVar.notify_one();
     }
