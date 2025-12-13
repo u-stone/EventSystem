@@ -219,6 +219,49 @@ int main() {
 
     EventCenter::instance().unregisterHandler(stress_handle);
 
+    // ===================================================================================
+    // STEP 8: Stability Test (Concurrent Registry Mutation)
+    // ===================================================================================
+    std::cout << "\n[8] DEMO: Stability Test (Chaos Mode)." << std::endl;
+    std::cout << "  - Testing thread safety of Register/Unregister while dispatching." << std::endl;
+
+    struct ChaosEvent { int val; };
+    std::atomic<bool> keep_running{true};
+    std::atomic<int> chaos_counter{0};
+
+    // Publishers: Flood the system with events
+    std::vector<std::thread> chaos_publishers;
+    for (int i = 0; i < 4; ++i) {
+        chaos_publishers.emplace_back([&]() {
+            while (keep_running) {
+                publish_event(ChaosEvent{1});
+                std::this_thread::yield(); // Yield to allow context switching
+            }
+        });
+    }
+
+    // Thrashers: Constantly register and unregister handlers
+    std::vector<std::thread> chaos_thrashers;
+    for (int i = 0; i < 2; ++i) {
+        chaos_thrashers.emplace_back([&]() {
+            while (keep_running) {
+                auto h = EventCenter::instance().registerHandler<ChaosEvent>([&](const ChaosEvent&) {
+                    chaos_counter.fetch_add(1, std::memory_order_relaxed);
+                });
+                EventCenter::instance().unregisterHandler(h);
+            }
+        });
+    }
+
+    std::cout << "  - Running chaos for 2 seconds..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    keep_running = false;
+
+    for (auto& t : chaos_publishers) t.join();
+    for (auto& t : chaos_thrashers) t.join();
+
+    std::cout << "  - Survived chaos. Events processed by transient handlers: " << chaos_counter.load() << std::endl;
+
     // --- Finalization ---
     std::cout << "\n--- Demo Finished ---" << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
