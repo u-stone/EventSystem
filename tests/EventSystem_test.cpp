@@ -354,3 +354,24 @@ TEST(EventSystemTest, SynchronousMode) {
 
     EventCenter::instance().unregisterHandler(handle);
 }
+
+TEST(EventSystemTest, SingletonDestruction) {
+    EventCenter& instance1 = EventCenter::instance();
+
+    // Register a handler on instance 1 to verify state loss
+    bool handled = false;
+    // We don't need to keep the handle because we are destroying the whole system
+    instance1.registerHandler<TestEvent1>([&](const TestEvent1&){
+        handled = true;
+    });
+
+    // Destroy the singleton
+    EventCenter::destroy();
+
+    // Get a new instance
+
+    // Verify state is reset (handler from instance1 should not exist in instance2)
+    publish_event(TestEvent1{1});
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(handled);
+}

@@ -61,8 +61,30 @@ public:
     // Provides access to the singleton instance.
     static EventCenter &instance()
     {
-        static EventCenter center;
-        return center;
+        EventCenter *ptr = m_instance.load(std::memory_order_acquire);
+        if (!ptr)
+        {
+            std::lock_guard<std::mutex> lock(m_creationMutex);
+            ptr = m_instance.load(std::memory_order_relaxed);
+            if (!ptr)
+            {
+                ptr = new EventCenter();
+                m_instance.store(ptr, std::memory_order_release);
+            }
+        }
+        return *ptr;
+    }
+
+    // Destroys the singleton instance.
+    static void destroy()
+    {
+        std::lock_guard<std::mutex> lock(m_creationMutex);
+        EventCenter *ptr = m_instance.load(std::memory_order_acquire);
+        if (ptr)
+        {
+            delete ptr;
+            m_instance.store(nullptr, std::memory_order_release);
+        }
     }
 
     // Deleted copy constructor and assignment operator.
@@ -450,6 +472,9 @@ private:
     std::atomic<bool> m_enableWorker;
     std::atomic<bool> m_threadRunning;
     std::mutex m_threadMutex;
+
+    inline static std::atomic<EventCenter *> m_instance{nullptr};
+    inline static std::mutex m_creationMutex;
 };
 
 //----------------------------------------------------------------
