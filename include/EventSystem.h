@@ -93,6 +93,7 @@ public:
 
     ~EventCenter()
     {
+        cancelAllEvents();
         setWorkThreadEnable(false);
     }
 
