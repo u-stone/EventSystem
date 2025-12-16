@@ -292,6 +292,30 @@ int main() {
     // Restore worker thread for clean shutdown or further steps
     EventCenter::instance().setWorkThreadEnable(true);
 
+    // ===================================================================================
+    // STEP 10: Manual Destruction Demo
+    // ===================================================================================
+    std::cout << "\n[10] DEMO: Manual Singleton Destruction." << std::endl;
+
+    // 1. Register a handler on the current instance
+    EventCenter::instance().registerHandler<SimpleMessageEvent>(
+        [](const SimpleMessageEvent& e) {
+            std::cout << "    -> [Old Instance Handler] ERROR: Should NOT see this: " << e.message << std::endl;
+        }
+    );
+    std::cout << "  - Registered handler on current instance." << std::endl;
+
+    // 2. Destroy the instance
+    std::cout << "  - Destroying EventCenter instance..." << std::endl;
+    EventCenter::destroy();
+
+    // 3. Get a new instance (happens automatically on access) and publish
+    std::cout << "  - Publishing event (triggers creation of NEW instance)..." << std::endl;
+    publish_event(SimpleMessageEvent{"Message for new instance"});
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::cout << "  - Verification: If no error output above, the old handler is gone." << std::endl;
+
     // --- Finalization ---
     std::cout << "\n--- Demo Finished ---" << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
