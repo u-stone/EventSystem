@@ -262,6 +262,36 @@ int main() {
 
     std::cout << "  - Survived chaos. Events processed by transient handlers: " << chaos_counter.load() << std::endl;
 
+    // ===================================================================================
+    // STEP 9: Synchronous Mode Demo
+    // ===================================================================================
+    std::cout << "\n[9] DEMO: Synchronous Mode (Worker Thread Disabled)." << std::endl;
+
+    // Disable the worker thread
+    EventCenter::instance().setWorkThreadEnable(false);
+    std::cout << "  - Worker thread disabled. Events are processed immediately on the calling thread." << std::endl;
+
+    bool sync_handled = false;
+    auto sync_handle = EventCenter::instance().registerHandler<SimpleMessageEvent>(
+        [&](const SimpleMessageEvent& event) {
+            std::cout << "    -> [SyncHandler] Received: " << event.message << std::endl;
+            sync_handled = true;
+        }
+    );
+
+    std::cout << "  - Publishing event..." << std::endl;
+    publish_event(SimpleMessageEvent{"I am synchronous!"});
+
+    if (sync_handled) {
+        std::cout << "  - Verification: Event was handled immediately." << std::endl;
+    } else {
+        std::cout << "  - Verification: FAILED! Event was not handled immediately." << std::endl;
+    }
+
+    EventCenter::instance().unregisterHandler(sync_handle);
+    // Restore worker thread for clean shutdown or further steps
+    EventCenter::instance().setWorkThreadEnable(true);
+
     // --- Finalization ---
     std::cout << "\n--- Demo Finished ---" << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

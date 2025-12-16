@@ -71,12 +71,7 @@ public:
 
     ~EventCenter()
     {
-        m_done = true;
-        m_condVar.notify_one();
-        if (m_workerThread.joinable())
-        {
-            m_workerThread.join();
-        }
+        setWorkThreadEnable(false);
     }
 
     // --- IEventHandler-based Subscription ---
@@ -191,6 +186,11 @@ public:
     template <typename TEvent>
     void publish_event(const TEvent &event)
     {
+        if (!m_enableWorker)
+        {
+            dispatchEvent(event, std::type_index(typeid(TEvent)));
+            return;
+        }
         publish_event_at(event, std::chrono::steady_clock::now());
     }
 
@@ -205,12 +205,23 @@ public:
     template <typename TEvent>
     void publish_event_at(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
     {
-        std::call_once(m_initFlag, &EventCenter::startWorker, this);
+        if (!m_enableWorker)
+        {
+            std::cerr << "[EventSystem] Error: Scheduled events are not supported in synchronous mode." << std::endl;
+            return;
+        }
 
-        // Optimization: Construct the event wrapper outside the lock.
-        // This ensures that copying the event data (into std::any) doesn't block the queue.
+        if (!m_threadRunning)
+        {
+            std::lock_guard<std::mutex> lock(m_threadMutex);
+            if (m_enableWorker && !m_threadRunning)
+            {
+                m_done = false;
+                m_workerThread = std::thread(&EventCenter::processEvents, this);
+                m_threadRunning = true;
+            }
+        }
         ScheduledEvent newEvent{timePoint, event, std::type_index(typeid(TEvent))};
-
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
             m_pendingEvents.push_back(std::move(newEvent));
@@ -225,6 +236,37 @@ public:
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_pendingEvents.clear();
         m_scheduledQueue = {}; // Clear the priority queue
+    }
+
+    void setWorkThreadEnable(bool enable)
+    {
+        std::lock_guard<std::mutex> lock(m_threadMutex);
+        if (m_enableWorker == enable)
+            return;
+
+        m_enableWorker = enable;
+        if (m_enableWorker)
+        {
+            if (!m_threadRunning)
+            {
+                m_done = false;
+                m_workerThread = std::thread(&EventCenter::processEvents, this);
+                m_threadRunning = true;
+            }
+        }
+        else
+        {
+            if (m_threadRunning)
+            {
+                m_done = true;
+                m_condVar.notify_all();
+                if (m_workerThread.joinable())
+                {
+                    m_workerThread.join();
+                }
+                m_threadRunning = false;
+            }
+        }
     }
 
 private:
@@ -253,13 +295,8 @@ private:
 
     // Private constructor for singleton pattern.
     EventCenter()
-        : m_done(false)
+        : m_done(false), m_enableWorker(true), m_threadRunning(false)
     {
-    }
-
-    void startWorker()
-    {
-        m_workerThread = std::thread(&EventCenter::processEvents, this);
     }
 
     void processEvents()
@@ -410,7 +447,9 @@ private:
 
     std::thread m_workerThread;
     std::atomic<bool> m_done;
-    std::once_flag m_initFlag;
+    std::atomic<bool> m_enableWorker;
+    std::atomic<bool> m_threadRunning;
+    std::mutex m_threadMutex;
 };
 
 //----------------------------------------------------------------
