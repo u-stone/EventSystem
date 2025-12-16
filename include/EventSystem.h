@@ -317,10 +317,7 @@ private:
     using GenericCallback = std::function<void(const std::any &)>;
 
     // Private constructor for singleton pattern.
-    EventCenter()
-        : m_done(false), m_enableWorker(true), m_threadRunning(false)
-    {
-    }
+    EventCenter() = default;
 
     void processEvents()
     {
@@ -469,9 +466,9 @@ private:
     std::condition_variable m_condVar;
 
     std::thread m_workerThread;
-    std::atomic<bool> m_done;
-    std::atomic<bool> m_enableWorker;
-    std::atomic<bool> m_threadRunning;
+    std::atomic<bool> m_done{false};
+    std::atomic<bool> m_enableWorker{true};
+    std::atomic<bool> m_threadRunning{false};
     std::mutex m_threadMutex;
 
     inline static std::atomic<EventCenter *> m_instance{nullptr};
