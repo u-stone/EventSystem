@@ -52,55 +52,18 @@ public:
 };
 
 //----------------------------------------------------------------
-// The EventCenter is a singleton that manages and dispatches events asynchronously.
-// It supports both class-based (IEventHandler) and function-based (callback) handlers.
+// EventRegistry: Manages event subscriptions and dispatching logic.
+// This is a base class for specific EventCenter implementations.
 //----------------------------------------------------------------
-class EventCenter
+class EventRegistry
 {
 public:
-    // Provides access to the singleton instance.
-    static EventCenter &instance()
-    {
-        EventCenter *ptr = m_instance.load(std::memory_order_acquire);
-        if (!ptr)
-        {
-            std::lock_guard<std::mutex> lock(m_creationMutex);
-            ptr = m_instance.load(std::memory_order_relaxed);
-            if (!ptr)
-            {
-                ptr = new EventCenter();
-                m_instance.store(ptr, std::memory_order_release);
-            }
-        }
-        return *ptr;
-    }
-
-    // Destroys the singleton instance.
-    static void destroy()
-    {
-        std::lock_guard<std::mutex> lock(m_creationMutex);
-        EventCenter *ptr = m_instance.load(std::memory_order_acquire);
-        if (ptr)
-        {
-            delete ptr;
-            m_instance.store(nullptr, std::memory_order_release);
-        }
-    }
-
-    // Deleted copy constructor and assignment operator.
-    EventCenter(const EventCenter &) = delete;
-    EventCenter &operator=(const EventCenter &) = delete;
-
-    ~EventCenter()
-    {
-        cancelAllEvents();
-        setWorkThreadEnable(false);
-    }
+    virtual ~EventRegistry() = default;
 
     // --- IEventHandler-based Subscription ---
 
     // Registers a handler with strong ownership (the default).
-    // The EventCenter will share ownership, keeping the handler alive until unregistered.
+    // The registry will share ownership, keeping the handler alive until unregistered.
     // Use this for "fire-and-forget" registration.
     template <typename TEvent>
     void registerHandler(const std::shared_ptr<IEventHandler> &handler)
@@ -111,7 +74,7 @@ public:
     }
 
     // Registers a handler with weak ownership.
-    // The EventCenter only observes the handler and will not keep it alive.
+    // The registry only observes the handler and will not keep it alive.
     // Use this when the handler's lifetime is managed externally to prevent potential memory leaks.
     template <typename TEvent>
     void registerWeakHandler(const std::shared_ptr<IEventHandler> &handler)
@@ -203,178 +166,7 @@ public:
         m_interfaceHandlers.erase(eventType);
     }
 
-    // --- Event Posting ---
-
-    // Publishes an event for immediate asynchronous processing.
-    template <typename TEvent>
-    void publish_event(const TEvent &event)
-    {
-        if (!m_enableWorker)
-        {
-            dispatchEvent(event, std::type_index(typeid(TEvent)));
-            return;
-        }
-        publish_event_at(event, std::chrono::steady_clock::now());
-    }
-
-    // Publishes an event to be processed after a specified delay.
-    template <typename TEvent>
-    void publish_event_delayed(const TEvent &event, std::chrono::milliseconds delay)
-    {
-        publish_event_at(event, std::chrono::steady_clock::now() + delay);
-    }
-
-    // Publishes an event to be processed at a specific time point.
-    template <typename TEvent>
-    void publish_event_at(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
-    {
-        if (!m_enableWorker)
-        {
-            std::cerr << "[EventSystem] Error: Scheduled events are not supported in synchronous mode." << std::endl;
-            return;
-        }
-
-        if (!m_threadRunning)
-        {
-            std::lock_guard<std::mutex> lock(m_threadMutex);
-            if (m_enableWorker && !m_threadRunning)
-            {
-                m_done = false;
-                m_workerThread = std::thread(&EventCenter::processEvents, this);
-                m_threadRunning = true;
-            }
-        }
-        ScheduledEvent newEvent{timePoint, event, std::type_index(typeid(TEvent))};
-        {
-            std::lock_guard<std::mutex> lock(m_queueMutex);
-            m_pendingEvents.push_back(std::move(newEvent));
-        }
-        m_condVar.notify_one();
-    }
-
-    // Cancels all pending and scheduled events that haven't been dispatched yet.
-    // This clears both the immediate pending queue and the future scheduled queue.
-    void cancelAllEvents()
-    {
-        std::lock_guard<std::mutex> lock(m_queueMutex);
-        m_pendingEvents.clear();
-        m_scheduledQueue = {}; // Clear the priority queue
-    }
-
-    void setWorkThreadEnable(bool enable)
-    {
-        std::lock_guard<std::mutex> lock(m_threadMutex);
-        if (m_enableWorker == enable)
-            return;
-
-        m_enableWorker = enable;
-        if (m_enableWorker)
-        {
-            if (!m_threadRunning)
-            {
-                m_done = false;
-                m_workerThread = std::thread(&EventCenter::processEvents, this);
-                m_threadRunning = true;
-            }
-        }
-        else
-        {
-            if (m_threadRunning)
-            {
-                m_done = true;
-                m_condVar.notify_all();
-                if (m_workerThread.joinable())
-                {
-                    m_workerThread.join();
-                }
-                m_threadRunning = false;
-            }
-        }
-    }
-
-private:
-    // Internal struct to hold event data along with its scheduled execution time.
-    struct ScheduledEvent
-    {
-        std::chrono::steady_clock::time_point executionTime;
-        std::any eventData;
-        std::type_index eventType;
-
-        // Comparison for the priority queue to make it a min-heap.
-        bool operator>(const ScheduledEvent &other) const
-        {
-            return executionTime > other.executionTime;
-        }
-    };
-
-    // Holds both strong and weak references for interface-based handlers
-    struct InterfaceHandlers
-    {
-        std::vector<std::shared_ptr<IEventHandler>> strongRefs;
-        std::vector<std::weak_ptr<IEventHandler>> weakRefs;
-    };
-
-    using GenericCallback = std::function<void(const std::any &)>;
-
-    // Private constructor for singleton pattern.
-    EventCenter() = default;
-
-    void processEvents()
-    {
-        while (true)
-        {
-            std::vector<ScheduledEvent> eventsToDispatch;
-
-            {
-                std::unique_lock<std::mutex> lock(m_queueMutex);
-
-                // 1. Move pending events to the scheduled queue
-                if (!m_pendingEvents.empty())
-                {
-                    for (auto &evt : m_pendingEvents)
-                    {
-                        m_scheduledQueue.push(std::move(evt));
-                    }
-                    m_pendingEvents.clear();
-                }
-
-                // 2. Wait logic
-                if (m_scheduledQueue.empty())
-                {
-                    m_condVar.wait(lock, [this] { return m_done || !m_pendingEvents.empty(); });
-                }
-                else
-                {
-                    m_condVar.wait_until(lock, m_scheduledQueue.top().executionTime, [this] { return m_done || !m_pendingEvents.empty(); });
-                }
-
-                if (m_done && m_pendingEvents.empty() && m_scheduledQueue.empty())
-                {
-                    return;
-                }
-
-                // If we woke up due to new pending events, loop back to merge them first
-                if (!m_pendingEvents.empty())
-                {
-                    continue;
-                }
-
-                // 3. Extract all ready events
-                auto now = std::chrono::steady_clock::now();
-                while (!m_scheduledQueue.empty() && m_scheduledQueue.top().executionTime <= now)
-                {
-                    eventsToDispatch.push_back(m_scheduledQueue.top());
-                    m_scheduledQueue.pop();
-                }
-            }
-
-            for (const auto &scheduledEvent : eventsToDispatch)
-            {
-                dispatchEvent(scheduledEvent.eventData, scheduledEvent.eventType);
-            }
-        }
-    }
-
+protected:
     void dispatchEvent(const std::any &eventData, const std::type_index &eventType)
     {
         std::vector<std::shared_ptr<IEventHandler>> strong_handlers;
@@ -449,6 +241,15 @@ private:
         }
     }
 
+    // Holds both strong and weak references for interface-based handlers
+    struct InterfaceHandlers
+    {
+        std::vector<std::shared_ptr<IEventHandler>> strongRefs;
+        std::vector<std::weak_ptr<IEventHandler>> weakRefs;
+    };
+
+    using GenericCallback = std::function<void(const std::any &)>;
+
     // Storage for interface-based subscriptions
     std::map<std::type_index, InterfaceHandlers>
         m_interfaceHandlers;
@@ -457,23 +258,258 @@ private:
     std::map<std::type_index, std::map<SubscriptionHandle, GenericCallback>> m_callbackHandlers;
     std::map<SubscriptionHandle, std::type_index> m_handleToEventTypeMap;
     std::atomic<SubscriptionHandle> m_nextSubscriptionId{0};
+    std::mutex m_registryMutex;
+};
 
-    // Buffer for receiving new events (Pending Queue).
+//----------------------------------------------------------------
+// SyncEventCenter: A simple, single-threaded event center.
+// Events are dispatched immediately on the calling thread.
+//----------------------------------------------------------------
+class SyncEventCenter : public EventRegistry
+{
+public:
+    static SyncEventCenter &instance()
+    {
+        SyncEventCenter *ptr = m_instance.load(std::memory_order_acquire);
+        if (!ptr)
+        {
+            std::lock_guard<std::mutex> lock(m_creationMutex);
+            ptr = m_instance.load(std::memory_order_relaxed);
+            if (!ptr)
+            {
+                ptr = new SyncEventCenter();
+                m_instance.store(ptr, std::memory_order_release);
+            }
+        }
+        return *ptr;
+    }
+
+    static void destroy()
+    {
+        std::lock_guard<std::mutex> lock(m_creationMutex);
+        SyncEventCenter *ptr = m_instance.load(std::memory_order_acquire);
+        if (ptr)
+        {
+            delete ptr;
+            m_instance.store(nullptr, std::memory_order_release);
+        }
+    }
+
+    SyncEventCenter(const SyncEventCenter &) = delete;
+    SyncEventCenter &operator=(const SyncEventCenter &) = delete;
+
+    // Publishes an event for immediate processing.
+    template <typename TEvent>
+    void publish_event(const TEvent &event)
+    {
+        dispatchEvent(event, std::type_index(typeid(TEvent)));
+    }
+
+private:
+    SyncEventCenter() = default;
+    inline static std::atomic<SyncEventCenter *> m_instance{nullptr};
+    inline static std::mutex m_creationMutex;
+};
+
+//----------------------------------------------------------------
+// AsyncEventCenter: A multi-threaded event center.
+// Events are queued and dispatched by a background worker thread.
+// Supports delayed and scheduled events.
+//----------------------------------------------------------------
+class AsyncEventCenter : public EventRegistry
+{
+public:
+    static AsyncEventCenter &instance()
+    {
+        AsyncEventCenter *ptr = m_instance.load(std::memory_order_acquire);
+        if (!ptr)
+        {
+            std::lock_guard<std::mutex> lock(m_creationMutex);
+            ptr = m_instance.load(std::memory_order_relaxed);
+            if (!ptr)
+            {
+                ptr = new AsyncEventCenter();
+                m_instance.store(ptr, std::memory_order_release);
+            }
+        }
+        return *ptr;
+    }
+
+    static void destroy()
+    {
+        std::lock_guard<std::mutex> lock(m_creationMutex);
+        AsyncEventCenter *ptr = m_instance.load(std::memory_order_acquire);
+        if (ptr)
+        {
+            delete ptr;
+            m_instance.store(nullptr, std::memory_order_release);
+        }
+    }
+
+    AsyncEventCenter(const AsyncEventCenter &) = delete;
+    AsyncEventCenter &operator=(const AsyncEventCenter &) = delete;
+
+    ~AsyncEventCenter()
+    {
+        cancelAllEvents();
+        stopWorkerThread();
+    }
+
+    // Publishes an event for asynchronous processing.
+    template <typename TEvent>
+    void publish_event(const TEvent &event)
+    {
+        publish_event_at(event, std::chrono::steady_clock::now());
+    }
+
+    // Publishes an event to be processed after a specified delay.
+    template <typename TEvent>
+    void publish_event_delayed(const TEvent &event, std::chrono::milliseconds delay)
+    {
+        publish_event_at(event, std::chrono::steady_clock::now() + delay);
+    }
+
+    // Publishes an event to be processed at a specific time point.
+    template <typename TEvent>
+    void publish_event_at(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
+    {
+        ensureWorkerThread();
+        ScheduledEvent newEvent{timePoint, event, std::type_index(typeid(TEvent))};
+        {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
+            m_pendingEvents.push_back(std::move(newEvent));
+        }
+        m_condVar.notify_one();
+    }
+
+    void cancelAllEvents()
+    {
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        m_pendingEvents.clear();
+        m_scheduledQueue = {};
+    }
+
+private:
+    AsyncEventCenter() = default;
+
+    // Ensures the worker thread is running, creating it if necessary.
+    // This uses a double-checked locking pattern. A std::mutex is chosen over
+    // std::call_once because the worker thread has a lifecycle that includes
+    // explicit destruction (~AsyncEventCenter -> stopWorkerThread). The mutex
+    // correctly serializes both creation and destruction, preventing race
+    // conditions where the thread might be stopped while it's still being
+    // created. std::call_once is ideal for resources that are initialized
+    // once and never destroyed until program termination.
+    void ensureWorkerThread()
+    {
+        if (!m_threadRunning)
+        {
+            std::lock_guard<std::mutex> lock(m_threadMutex);
+            // The mutex synchronizes access for both creation and destruction.
+            if (!m_threadRunning)
+            {
+                m_done = false;
+                m_workerThread = std::thread(&AsyncEventCenter::processEvents, this);
+                m_threadRunning = true;
+            }
+        }
+    }
+
+    void stopWorkerThread()
+    {
+        std::lock_guard<std::mutex> lock(m_threadMutex);
+        if (m_threadRunning)
+        {
+            m_done = true;
+            m_condVar.notify_all();
+            if (m_workerThread.joinable())
+            {
+                m_workerThread.join();
+            }
+            m_threadRunning = false;
+        }
+    }
+
+    struct ScheduledEvent
+    {
+        std::chrono::steady_clock::time_point executionTime;
+        std::any eventData;
+        std::type_index eventType;
+
+        bool operator>(const ScheduledEvent &other) const
+        {
+            return executionTime > other.executionTime;
+        }
+    };
+
+    void processEvents()
+    {
+        while (true)
+        {
+            std::vector<ScheduledEvent> eventsToDispatch;
+
+            {
+                std::unique_lock<std::mutex> lock(m_queueMutex);
+
+                if (!m_pendingEvents.empty())
+                {
+                    for (auto &evt : m_pendingEvents)
+                    {
+                        m_scheduledQueue.push(std::move(evt));
+                    }
+                    m_pendingEvents.clear();
+                }
+
+                if (m_scheduledQueue.empty())
+                {
+                    m_condVar.wait(lock, [this] { return m_done || !m_pendingEvents.empty(); });
+                }
+                else
+                {
+                    m_condVar.wait_until(lock, m_scheduledQueue.top().executionTime, [this] { return m_done || !m_pendingEvents.empty(); });
+                }
+
+                if (m_done && m_pendingEvents.empty() && m_scheduledQueue.empty())
+                {
+                    return;
+                }
+
+                if (!m_pendingEvents.empty())
+                {
+                    continue;
+                }
+
+                auto now = std::chrono::steady_clock::now();
+                while (!m_scheduledQueue.empty() && m_scheduledQueue.top().executionTime <= now)
+                {
+                    eventsToDispatch.push_back(m_scheduledQueue.top());
+                    m_scheduledQueue.pop();
+                }
+            }
+
+            for (const auto &scheduledEvent : eventsToDispatch)
+            {
+                dispatchEvent(scheduledEvent.eventData, scheduledEvent.eventType);
+            }
+        }
+    }
+
     std::vector<ScheduledEvent> m_pendingEvents;
     std::priority_queue<ScheduledEvent, std::vector<ScheduledEvent>, std::greater<ScheduledEvent>> m_scheduledQueue;
     std::mutex m_queueMutex;
-    std::mutex m_registryMutex;
     std::condition_variable m_condVar;
 
     std::thread m_workerThread;
     std::atomic<bool> m_done{false};
-    std::atomic<bool> m_enableWorker{true};
     std::atomic<bool> m_threadRunning{false};
     std::mutex m_threadMutex;
 
-    inline static std::atomic<EventCenter *> m_instance{nullptr};
+    inline static std::atomic<AsyncEventCenter *> m_instance{nullptr};
     inline static std::mutex m_creationMutex;
 };
+
+// Alias for backward compatibility, or default to AsyncEventCenter
+using EventCenter = AsyncEventCenter;
 
 //----------------------------------------------------------------
 // Helper "Tool" functions to publish events from anywhere.
@@ -484,25 +520,56 @@ private:
 // processing by the EventCenter's worker thread.
 //----------------------------------------------------------------
 
-// Publishes an event for immediate asynchronous processing.
+// --- Synchronous Publishing ---
+
+// Publishes an event for immediate synchronous processing on the calling thread.
+template <typename TEvent>
+void publish_event_sync(const TEvent &event)
+{
+    SyncEventCenter::instance().publish_event(event);
+}
+
+// --- Asynchronous Publishing ---
+
+// Publishes an event for asynchronous processing (default).
+template <typename TEvent>
+void publish_event_async(const TEvent &event)
+{
+    AsyncEventCenter::instance().publish_event(event);
+}
+
+// Publishes an event to be processed after a specified delay (asynchronous).
+template <typename TEvent>
+void publish_event_delayed_async(const TEvent &event, std::chrono::milliseconds delay)
+{
+    AsyncEventCenter::instance().publish_event_delayed(event, delay);
+}
+
+// Publishes an event to be processed at a specific time point (asynchronous).
+template <typename TEvent>
+void publish_event_at_async(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
+{
+    AsyncEventCenter::instance().publish_event_at(event, timePoint);
+}
+
+// --- Default/Legacy Aliases (Async by default) ---
+
 template <typename TEvent>
 void publish_event(const TEvent &event)
 {
-    EventCenter::instance().publish_event(event);
+    publish_event_async(event);
 }
 
-// Publishes an event to be processed after a specified delay.
 template <typename TEvent>
 void publish_event_delayed(const TEvent &event, std::chrono::milliseconds delay)
 {
-    EventCenter::instance().publish_event_delayed(event, delay);
+    publish_event_delayed_async(event, delay);
 }
 
-// Publishes an event to be processed at a specific time point.
 template <typename TEvent>
 void publish_event_at(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
 {
-    EventCenter::instance().publish_event_at(event, timePoint);
+    publish_event_at_async(event, timePoint);
 }
 
 // Cancels all pending and scheduled events.

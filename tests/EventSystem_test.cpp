@@ -39,9 +39,11 @@ class EventSystemTest : public ::testing::Test {
 protected:
     void SetUp() override {
         EventCenter::destroy();
+        SyncEventCenter::destroy();
     }
     void TearDown() override {
         EventCenter::destroy();
+        SyncEventCenter::destroy();
     }
 };
 
@@ -317,30 +319,24 @@ TEST_F(EventSystemTest, ExceptionIsolation) {
 }
 
 TEST_F(EventSystemTest, SynchronousMode) {
-    // 1. Switch to synchronous mode
-    EventCenter::instance().setWorkThreadEnable(false);
-
     bool handled = false;
     std::thread::id handler_thread_id;
     auto main_thread_id = std::this_thread::get_id();
 
-    auto handle = EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1& e) {
+    // Register with SyncEventCenter
+    auto handle = SyncEventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1& e) {
         handled = true;
         handler_thread_id = std::this_thread::get_id();
     });
 
-    // 2. Publish event
-    publish_event(TestEvent1{1});
+    // 2. Publish event synchronously
+    publish_event_sync(TestEvent1{1});
 
     // 3. Verify immediate execution on the same thread
     EXPECT_TRUE(handled);
     EXPECT_EQ(handler_thread_id, main_thread_id);
-
-    // 4. Verify delayed events are ignored in sync mode
-    handled = false;
-    publish_event_delayed(TestEvent1{2}, std::chrono::milliseconds(10));
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_FALSE(handled);
+    
+    SyncEventCenter::instance().unregisterHandler(handle);
 }
 
 TEST_F(EventSystemTest, SingletonDestruction) {
