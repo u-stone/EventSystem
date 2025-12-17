@@ -265,22 +265,19 @@ int main() {
     // ===================================================================================
     // STEP 9: Synchronous Mode Demo
     // ===================================================================================
-    std::cout << "\n[9] DEMO: Synchronous Mode (Worker Thread Disabled)." << std::endl;
-
-    // Disable the worker thread
-    EventCenter::instance().setWorkThreadEnable(false);
-    std::cout << "  - Worker thread disabled. Events are processed immediately on the calling thread." << std::endl;
+    std::cout << "\n[9] DEMO: Synchronous Mode (Using SyncEventCenter)." << std::endl;
 
     bool sync_handled = false;
-    auto sync_handle = EventCenter::instance().registerHandler<SimpleMessageEvent>(
+    // Register with SyncEventCenter
+    auto sync_handle = SyncEventCenter::instance().registerHandler<SimpleMessageEvent>(
         [&](const SimpleMessageEvent& event) {
             std::cout << "    -> [SyncHandler] Received: " << event.message << std::endl;
             sync_handled = true;
         }
     );
 
-    std::cout << "  - Publishing event..." << std::endl;
-    publish_event(SimpleMessageEvent{"I am synchronous!"});
+    std::cout << "  - Publishing event via publish_event_sync..." << std::endl;
+    publish_event_sync(SimpleMessageEvent{"I am synchronous!"});
 
     if (sync_handled) {
         std::cout << "  - Verification: Event was handled immediately." << std::endl;
@@ -288,9 +285,8 @@ int main() {
         std::cout << "  - Verification: FAILED! Event was not handled immediately." << std::endl;
     }
 
-    EventCenter::instance().unregisterHandler(sync_handle);
-    // Restore worker thread for clean shutdown or further steps
-    EventCenter::instance().setWorkThreadEnable(true);
+    SyncEventCenter::instance().unregisterHandler(sync_handle);
+    SyncEventCenter::destroy();
 
     // ===================================================================================
     // STEP 10: Manual Destruction Demo
