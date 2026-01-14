@@ -1,4 +1,5 @@
 #include "EventSystem.h"
+#include "MessageCenter.h"
 #include <string>
 #include <chrono>
 #include <iostream>
@@ -311,6 +312,55 @@ int main() {
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     std::cout << "  - Verification: If no error output above, the old handler is gone." << std::endl;
+
+    // ===================================================================================
+    // STEP 11: MessageCenter Demo
+    // ===================================================================================
+    std::cout << "\n[11] DEMO: MessageCenter (String-based Observer)." << std::endl;
+
+    // --- Async Usage (Default) ---
+    std::cout << "  [Async Mode]" << std::endl;
+    auto msg_token = subscribe_message("greeting", [](const std::string& msg) {
+        std::cout << "    -> [AsyncMessageCenter] Received on 'greeting': " << msg << std::endl;
+    });
+
+    publish_message("greeting", "Hello Async World");
+    // Need to sleep briefly because it's async
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    unsubscribe_message("greeting", msg_token);
+
+    // --- Sync Usage ---
+    std::cout << "  [Sync Mode]" << std::endl;
+    auto sync_token = subscribe_message_sync("sync_topic", [](const std::string& msg) {
+        std::cout << "    -> [SyncMessageCenter] Received on 'sync_topic': " << msg << std::endl;
+    });
+
+    publish_message_sync("sync_topic", "Hello Sync World");
+    unsubscribe_message_sync("sync_topic", sync_token);
+
+    // ===================================================================================
+    // STEP 12: New Convenient Event Subscription API Demo
+    // ===================================================================================
+    std::cout << "\n[12] DEMO: Convenient Event Subscription API (subscribe_event)." << std::endl;
+    
+    struct ConvenientEvent { std::string msg; };
+
+    // Subscribe Async
+    auto conv_token = subscribe_event<ConvenientEvent>([](const ConvenientEvent& e) {
+        std::cout << "    -> [Convenient-Async] Received: " << e.msg << std::endl;
+    });
+
+    publish_event(ConvenientEvent{"Testing subscribe_event"});
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    unsubscribe_event(conv_token);
+
+    // Subscribe Sync
+    auto conv_sync_token = subscribe_event_sync<ConvenientEvent>([](const ConvenientEvent& e) {
+        std::cout << "    -> [Convenient-Sync] Received: " << e.msg << std::endl;
+    });
+
+    publish_event_sync(ConvenientEvent{"Testing subscribe_event_sync"});
+    unsubscribe_event_sync(conv_sync_token);
 
     // --- Finalization ---
     std::cout << "\n--- Demo Finished ---" << std::endl;

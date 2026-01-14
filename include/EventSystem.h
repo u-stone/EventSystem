@@ -579,6 +579,49 @@ inline void cancelAllEvents()
 }
 
 //----------------------------------------------------------------
+// Helper "Tool" functions for convenient EventCenter registration.
+//----------------------------------------------------------------
+
+// Subscribes a callback to an event type (Asynchronous by default).
+template <typename TEvent>
+SubscriptionHandle subscribe_event_async(std::function<void(const TEvent&)> callback)
+{
+    return AsyncEventCenter::instance().registerHandler<TEvent>(std::move(callback));
+}
+
+// Subscribes a callback to an event type (Synchronous).
+template <typename TEvent>
+SubscriptionHandle subscribe_event_sync(std::function<void(const TEvent&)> callback)
+{
+    return SyncEventCenter::instance().registerHandler<TEvent>(std::move(callback));
+}
+
+// Default alias to subscribe_event_async.
+template <typename TEvent>
+SubscriptionHandle subscribe_event(std::function<void(const TEvent&)> callback)
+{
+    return subscribe_event_async<TEvent>(std::move(callback));
+}
+
+// Unsubscribes a handler (Asynchronous).
+inline void unsubscribe_event_async(SubscriptionHandle handle)
+{
+    AsyncEventCenter::instance().unregisterHandler(handle);
+}
+
+// Unsubscribes a handler (Synchronous).
+inline void unsubscribe_event_sync(SubscriptionHandle handle)
+{
+    SyncEventCenter::instance().unregisterHandler(handle);
+}
+
+// Default alias to unsubscribe_event_async.
+inline void unsubscribe_event(SubscriptionHandle handle)
+{
+    unsubscribe_event_async(handle);
+}
+
+//----------------------------------------------------------------
 // Helper "Tool" function for self-registering stateless events.
 //
 // This provides an elegant pattern for simple, stateless handlers.

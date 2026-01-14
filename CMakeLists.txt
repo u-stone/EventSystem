@@ -49,5 +49,10 @@ add_executable(test_event_system tests/EventSystem_test.cpp)
 # Link the test executable against GTest
 target_link_libraries(test_event_system GTest::gtest_main)
 
+# Message Center Tests
+add_executable(test_message_center tests/test_message_center.cpp)
+
+target_link_libraries(test_message_center GTest::gtest_main)
+
 include(GoogleTest)
 gtest_discover_tests(test_event_system)

@@ -1,75 +1,106 @@
 # C++17 Asynchronous Event System (NotifyCenter)
 
 ## 1. 项目简介
-**EventSystem** 是一个基于 C++17 标准开发的高性能、线程安全、支持多范式的异步事件分发系统。它旨在为 C++ 应用程序提供解耦的组件通信机制。
+**EventSystem** 是一个基于 C++17 标准开发的高性能、线程安全、支持多范式的事件分发系统。它提供了两种核心模式，以满足不同场景下的解耦通信需求：
 
-核心组件 `EventCenter` 采用单例模式，内部维护一个后台工作线程（Worker Thread），负责将发布的事件异步分发给所有注册的处理器。系统设计注重**内存安全**、**API 易用性**以及**高并发下的稳定性**。
+1.  **EventCenter (Type-based)**: 基于强类型的事件分发，利用 C++ 类型系统确保安全性和高性能。
+2.  **MessageCenter (String-based)**: 基于字符串 Topic 的观察者模式，适用于轻量级、高度松耦合的通知场景。
+
+系统支持**同步**与**完全异步**两种分发模式，内置后台工作线程处理异步任务，并具备内存安全管理、异常隔离及性能监控等企业级特性。
 
 ## 2. 核心特性
 
-*   **完全异步 (Fully Asynchronous)**: 事件发布是非阻塞的（Fire-and-forget），所有事件处理都在独立的后台线程中执行，不会阻塞发布者线程。
-*   **多种注册范式 (Multi-Paradigm Registration)**:
-    *   **强引用 (Strong)**: `EventCenter` 持有处理器所有权，适合“即发即忘”的生命周期管理。
-    *   **弱引用 (Weak)**: `EventCenter` 仅持有弱引用，防止循环引用和内存泄漏，适合外部管理生命周期的对象。
-    *   **回调函数 (Callback)**: 支持 Lambda 表达式和 `std::function`，适合轻量级逻辑。
-    *   **静态处理器 (Static)**: 支持无状态事件的极简注册模式。
-*   **定时与延时投递 (Scheduled Dispatch)**: 支持立即发布、延时发布 (`publish_event_delayed`) 以及指定时间点发布 (`publish_event_at`)。
-*   **高性能与低延迟**:
-    *   发布事件时在锁外构造对象，最小化临界区耗时。
-    *   使用 `std::move` 语义减少不必要的拷贝。
+### 通用特性
+*   **双重模式**: 同时支持基于类型的事件 (`EventCenter`) 和基于字符串的消息 (`MessageCenter`)。
+*   **同步/异步可选**: 每个组件均提供同步 (`Sync`) 和异步 (`Async`) 实例，满足不同实时性要求。
 *   **健壮性设计**:
-    *   **异常隔离**: 单个处理器的异常崩溃不会影响其他处理器或导致系统崩溃。
-    *   **死锁/超时检测**: 自动检测并警告执行时间超过 500ms 的慢速处理器。
-    *   **稳定性测试**: 通过了高并发下的压力测试（Throughput）和混沌测试（Stability/Chaos）。
-*   **控制能力**: 支持 `cancelAllEvents()` 紧急取消所有未决事件。
+    *   **异常隔离**: 单个处理器的异常不会影响系统整体或其他订阅者。
+    *   **性能监控**: 自动检测并警告执行时间超过 500ms 的慢速处理器。
+*   **线程安全**: 所有注册和发布操作均是线程安全的。
+
+### EventCenter (Type-based)
+*   **多种注册范式**: 
+    *   **强引用 (Strong)**: 自动管理处理器生命周期。
+    *   **弱引用 (Weak)**: 防止循环引用，适合外部管理生命周期的对象。
+    *   **回调 (Callback)**: 支持 Lambda 和 `std::function`。
+*   **定时投递**: 支持立即发布、延时发布 (`publish_event_delayed`) 以及指定时间点发布 (`publish_event_at`)。
+
+### MessageCenter (String-based)
+*   **极简解耦**: 无需定义事件类，仅凭字符串 Topic 即可订阅和发布。
+*   **订阅令牌**: 订阅返回 `SubscriptionToken`，用于精确注销。
 
 ## 3. 快速上手
 
-### 3.1 定义事件
-事件可以是任意的结构体或类，无需继承特定基类。
+### 3.1 EventCenter 用法 (基于类型)
+适用于复杂逻辑、强类型约束的场景。
 
+#### 定义与注册
 ```cpp
-struct LoginEvent {
-    std::string username;
-    bool success;
-};
+struct LoginEvent { std::string user; };
+
+// 注册异步回调 (默认)
+auto handle = EventCenter::instance().registerHandler<LoginEvent>([](const LoginEvent& e) {
+    std::cout << "User " << e.user << " logged in (Async)" << std::endl;
+});
+
+// 便捷注册接口 (等效于上述代码)
+auto handle2 = subscribe_event<LoginEvent>([](const LoginEvent& e) {
+    std::cout << "User " << e.user << " logged in (Async via Tool)" << std::endl;
+});
+
+// 注册同步回调
+SyncEventCenter::instance().registerHandler<LoginEvent>([](const LoginEvent& e) {
+    std::cout << "Immediate processing for " << e.user << std::endl;
+});
+
+// 便捷同步注册
+auto sync_handle = subscribe_event_sync<LoginEvent>([](const LoginEvent& e) {
+    std::cout << "Immediate processing (Sync via Tool)" << std::endl;
+});
 ```
 
-### 3.2 注册处理器
-
-**方式 A：使用 Lambda 表达式**
+#### 发布事件
 ```cpp
-auto handle = EventCenter::instance().registerHandler<LoginEvent>(
-    [](const LoginEvent& event) {
-        std::cout << "User " << event.username << " logged in: " << event.success << std::endl;
-    }
-);
+// 异步发布 (不阻塞)
+publish_event(LoginEvent{"Alice"});
+
+// 延时 500ms 异步发布
+publish_event_delayed(LoginEvent{"Bob"}, std::chrono::milliseconds(500));
+
+// 同步发布 (在当前线程立即执行)
+publish_event_sync(LoginEvent{"Charlie"});
+
+// 注销订阅
+unsubscribe_event(handle2);
+unsubscribe_event_sync(sync_handle);
+```
+
+### 3.2 MessageCenter 用法 (基于字符串)
+适用于简单的通知、全局状态更新等场景。
+
+#### 订阅消息
+```cpp
+// 订阅异步消息 (默认)
+auto token = subscribe_message("system_ready", [](const std::string& msg) {
+    std::cout << "Message received: " << msg << std::endl;
+});
+
+// 订阅同步消息
+auto sync_token = subscribe_message_sync("config_update", [](const std::string& msg) {
+    // 立即处理配置变更
+});
+```
+
+#### 发布消息
+```cpp
+// 异步发布
+publish_message("system_ready", "All modules loaded");
+
+// 同步发布
+publish_message_sync("config_update", "new_config_path.json");
+
 // 注销
-EventCenter::instance().unregisterHandler(handle);
-```
-
-**方式 B：使用类处理器 (强引用)**
-```cpp
-class AuthLogger : public IEventHandler {
-    void handle(const std::any& eventData) override {
-        if (auto* event = std::any_cast<LoginEvent>(&eventData)) {
-            // 处理逻辑...
-        }
-    }
-};
-
-// 注册后，EventCenter 会保持该对象存活
-EventCenter::instance().registerHandler<LoginEvent>(std::make_shared<AuthLogger>());
-```
-
-### 3.3 发布事件
-
-```cpp
-// 立即发布
-publish_event(LoginEvent{"Alice", true});
-
-// 延时 200ms 发布
-publish_event_delayed(LoginEvent{"Bob", false}, std::chrono::milliseconds(200));
+unsubscribe_message("system_ready", token);
 ```
 
 ## 4. 构建与测试
@@ -77,17 +108,18 @@ publish_event_delayed(LoginEvent{"Bob", false}, std::chrono::milliseconds(200));
 项目包含完整的 CMake 构建脚本和 GoogleTest 单元测试。
 
 **Windows (使用 build.bat):**
-只需运行根目录下的 `build.bat` 脚本，它会自动完成以下步骤：
-1. 检测 Visual Studio 版本。
-2. 配置 CMake。
-3. 编译主程序 (`main_app`) 和测试程序 (`test_event_system`)。
-4. 运行所有单元测试 (GoogleTest)。
-5. 运行演示主程序。
+直接运行 `build.bat`。该脚本会自动配置 CMake、编译 `main_app` 及测试程序，并执行所有单元测试。
 
 **手动构建:**
 ```bash
 mkdir build && cd build
 cmake ..
-cmake --build . --config Debug
-ctest -C Debug --output-on-failure
+cmake --build . --config Release
+ctest -C Release --output-on-failure
 ```
+
+## 5. 目录结构
+*   `include/`: 头文件 (`EventSystem.h`, `MessageCenter.h`)。
+*   `app/`: 演示程序入口。
+*   `tests/`: 单元测试代码。
+*   `external/`: 外部依赖 (GoogleTest)。
