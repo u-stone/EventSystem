@@ -1,10 +1,12 @@
 #include "gtest/gtest.h"
-#include "EventSystem.h"
+#include "EventSystem/EventCenter.h"
 #include <thread>
 #include <chrono>
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+
+using namespace eventsystem;
 
 // Use a short sleep to give the worker thread time to process
 // in tests where we expect something *not* to happen.
