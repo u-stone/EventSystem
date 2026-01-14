@@ -1,58 +1,42 @@
-# Set the minimum required version of CMake and project details
 cmake_minimum_required(VERSION 3.14)
-project(NotifyCenter CXX)
+project(EventSystem VERSION 1.0.0 LANGUAGES CXX)
 
-# Set the C++ standard to 17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# --- Include Directories ---
-# Add the 'include' directory to the include path
-include_directories(include)
+# Output directories for artifacts (Simplifies DLL handling on Windows)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Option to build shared library (Default: OFF for FetchContent friendliness, but ON for DLL testing)
+option(BUILD_SHARED_LIBS "Build shared library" ON)
+option(EVENTSYSTEM_BUILD_EXAMPLES "Build example applications" ON)
+option(EVENTSYSTEM_BUILD_TESTS "Build unit tests" ON)
 
-# --- Google Test Framework ---
-# Enable testing for the project. Must be called before adding tests.
-enable_testing()
+# Subdirectories
+add_subdirectory(src)
 
-# Force Google Test to use shared CRT (MD/MDd) to match the application
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-
-# Use FetchContent to download Google Test automatically if not found.
-# We set FETCHCONTENT_BASE_DIR to a directory outside the build tree to cache
-# the download, avoiding re-downloads on every clean build.
-include(FetchContent)
-set(FETCHCONTENT_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-)
-
-# For projects >= 3.11, set FETCHCONTENT_QUIET to FALSE to see progress
-set(FETCHCONTENT_QUIET FALSE) 
-FetchContent_GetProperties(googletest)
-if(NOT googletest_POPULATED)
-  FetchContent_Populate(googletest)
-  add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
+if(EVENTSYSTEM_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()
 
-
-# --- Main Application ---
-# Add the main application executable from the 'app' directory
-add_executable(main_app app/main.cpp)
-
-
-# --- Unit Tests ---
-# Add the test executable from the 'test' directory
-add_executable(test_event_system tests/EventSystem_test.cpp)
-
-# Link the test executable against GTest
-target_link_libraries(test_event_system GTest::gtest_main)
-
-# Message Center Tests
-add_executable(test_message_center tests/test_message_center.cpp)
-
-target_link_libraries(test_message_center GTest::gtest_main)
-
-include(GoogleTest)
-gtest_discover_tests(test_event_system)
+if(EVENTSYSTEM_BUILD_TESTS)
+    enable_testing()
+    # GoogleTest Setup
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    include(FetchContent)
+    set(FETCHCONTENT_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+    FetchContent_Declare(
+      googletest
+      URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    set(FETCHCONTENT_QUIET FALSE) 
+    FetchContent_GetProperties(googletest)
+    if(NOT googletest_POPULATED)
+      FetchContent_Populate(googletest)
+      add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
+    endif()
+    
+    add_subdirectory(tests)
+endif()

@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
-#include "MessageCenter.h"
+#include "EventSystem/MessageCenter.h"
 #include <string>
 #include <atomic>
 #include <thread>
 #include <chrono>
+
+using namespace eventsystem;
 
 class MessageCenterTest : public ::testing::Test {
 protected:

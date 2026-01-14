@@ -1,9 +1,11 @@
-#include "EventSystem.h"
-#include "MessageCenter.h"
+#include "EventSystem/EventCenter.h"
+#include "EventSystem/MessageCenter.h"
 #include <string>
 #include <chrono>
 #include <iostream>
 #include <thread>
+
+using namespace eventsystem;
 
 // --- Event & Handler for Weak Registration Demo ---
 struct ManagedEvent { std::string data; };
