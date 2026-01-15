@@ -292,7 +292,7 @@ int main() {
     SyncEventCenter::destroy();
 
     // ===================================================================================
-    // STEP 10: Manual Destruction Demo
+    // STEP 10: Manual Singleton Destruction
     // ===================================================================================
     std::cout << "\n[10] DEMO: Manual Singleton Destruction." << std::endl;
 
@@ -305,8 +305,9 @@ int main() {
     std::cout << "  - Registered handler on current instance." << std::endl;
 
     // 2. Destroy the instance
-    std::cout << "  - Destroying EventCenter instance..." << std::endl;
+    std::cout << "  - Destroying EventCenter instance and resetting Registry..." << std::endl;
     EventCenter::destroy();
+    EventRegistry::reset(); // Needed now as subscriptions are static!
 
     // 3. Get a new instance (happens automatically on access) and publish
     std::cout << "  - Publishing event (triggers creation of NEW instance)..." << std::endl;
@@ -323,7 +324,7 @@ int main() {
     // --- Async Usage (Default) ---
     std::cout << "  [Async Mode]" << std::endl;
     auto msg_token = subscribe_message("greeting", [](const std::string& msg) {
-        std::cout << "    -> [AsyncMessageCenter] Received on 'greeting': " << msg << std::endl;
+        std::cout << "    -> [MessageCenter (Async)] Received on 'greeting': " << msg << std::endl;
     });
 
     publish_message("greeting", "Hello Async World");
@@ -333,12 +334,12 @@ int main() {
 
     // --- Sync Usage ---
     std::cout << "  [Sync Mode]" << std::endl;
-    auto sync_token = subscribe_message_sync("sync_topic", [](const std::string& msg) {
-        std::cout << "    -> [SyncMessageCenter] Received on 'sync_topic': " << msg << std::endl;
+    auto sync_token = subscribe_message("sync_topic", [](const std::string& msg) {
+        std::cout << "    -> [MessageCenter (Sync)] Received on 'sync_topic': " << msg << std::endl;
     });
 
     publish_message_sync("sync_topic", "Hello Sync World");
-    unsubscribe_message_sync("sync_topic", sync_token);
+    unsubscribe_message("sync_topic", sync_token);
 
     // ===================================================================================
     // STEP 12: New Convenient Event Subscription API Demo
@@ -347,22 +348,51 @@ int main() {
     
     struct ConvenientEvent { std::string msg; };
 
-    // Subscribe Async
+    // Subscribe (Unified)
     auto conv_token = subscribe_event<ConvenientEvent>([](const ConvenientEvent& e) {
-        std::cout << "    -> [Convenient-Async] Received: " << e.msg << std::endl;
+        std::cout << "    -> [Unified] Received: " << e.msg << std::endl;
     });
 
-    publish_event(ConvenientEvent{"Testing subscribe_event"});
+    // Publish Async
+    publish_event(ConvenientEvent{"Async Publish"});
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Publish Sync
+    publish_event_sync(ConvenientEvent{"Sync Publish"});
+
     unsubscribe_event(conv_token);
 
-    // Subscribe Sync
-    auto conv_sync_token = subscribe_event_sync<ConvenientEvent>([](const ConvenientEvent& e) {
-        std::cout << "    -> [Convenient-Sync] Received: " << e.msg << std::endl;
+    // ===================================================================================
+    // STEP 13: MessageCenter Unsubscribe All Demo
+    // ===================================================================================
+    std::cout << "\n[13] DEMO: MessageCenter Unsubscribe All for Topic." << std::endl;
+
+    subscribe_message("bulk_topic", [](const std::string& m){ std::cout << "    -> Listener 1: " << m << std::endl; });
+    subscribe_message("bulk_topic", [](const std::string& m){ std::cout << "    -> Listener 2: " << m << std::endl; });
+
+    std::cout << "  - Publishing 'First Message'..." << std::endl;
+    publish_message_sync("bulk_topic", "First Message");
+
+    std::cout << "  - Unsubscribing ALL listeners for 'bulk_topic'..." << std::endl;
+    eventsystem::unsubscribe_message("bulk_topic"); 
+
+    std::cout << "  - Publishing 'Second Message' (Should see no output)..." << std::endl;
+    publish_message_sync("bulk_topic", "Second Message");
+
+    // ===================================================================================
+    // STEP 14: Shared Registry Demo (Sync + Async on same subscriber)
+    // ===================================================================================
+    std::cout << "\n[14] DEMO: Shared Registry (One subscriber, multiple sources)." << std::endl;
+
+    auto shared_token = subscribe_message("shared_channel", [](const std::string& msg) {
+        std::cout << "    -> [Subscriber] Received: " << msg << std::endl;
     });
 
-    publish_event_sync(ConvenientEvent{"Testing subscribe_event_sync"});
-    unsubscribe_event_sync(conv_sync_token);
+    publish_message_async("shared_channel", "From Async Source");
+    publish_message_sync("shared_channel", "From Sync Source");
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    unsubscribe_message("shared_channel", shared_token);
 
     // --- Finalization ---
     std::cout << "\n--- Demo Finished ---" << std::endl;

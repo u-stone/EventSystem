@@ -8,15 +8,20 @@ namespace eventsystem {
 // MessageRegistry
 // =========================================================
 
+// Define static members
+std::unordered_map<std::string, std::vector<MessageRegistry::SubscriberEntry>> MessageRegistry::m_subscriptions;
+std::mutex MessageRegistry::m_registryMutex;
+std::atomic<MessageRegistry::SubscriptionToken> MessageRegistry::m_nextToken{0};
+
 MessageRegistry::SubscriptionToken MessageRegistry::subscribe(const std::string& topic, MessageCallback callback) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(m_registryMutex);
     SubscriptionToken token = m_nextToken++;
     m_subscriptions[topic].push_back({token, std::move(callback)});
     return token;
 }
 
 void MessageRegistry::unsubscribe(const std::string& topic, SubscriptionToken token) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(m_registryMutex);
     auto it = m_subscriptions.find(topic);
     if (it != m_subscriptions.end()) {
         auto& subscribers = it->second;
@@ -27,12 +32,17 @@ void MessageRegistry::unsubscribe(const std::string& topic, SubscriptionToken to
     }
 }
 
+void MessageRegistry::unsubscribe(const std::string& topic) {
+    std::lock_guard<std::mutex> lock(m_registryMutex);
+    m_subscriptions.erase(topic);
+}
+
 void MessageRegistry::dispatch(const std::string& topic, const std::string& message) {
     std::vector<MessageCallback> callbacksToInvoke;
     
-    // 1. Collect current callbacks within the lock
+    // 1. Collect current callbacks within the lock (Shared Data)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::mutex> lock(m_registryMutex);
         auto it = m_subscriptions.find(topic);
         if (it != m_subscriptions.end()) {
             for (const auto& entry : it->second) {
