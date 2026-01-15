@@ -14,8 +14,8 @@
 namespace eventsystem {
 
 /**
- * @brief MessageRegistry manages subscriptions and dispatching logic for string-based events.
- * Base class for SyncMessageCenter and AsyncMessageCenter.
+ * @brief MessageRegistry manages the shared subscriptions for all message centers.
+ * Subscriptions are shared across Sync and Async centers.
  */
 class EVENTSYSTEM_API MessageRegistry {
 public:
@@ -24,11 +24,14 @@ public:
 
     virtual ~MessageRegistry() = default;
 
-    SubscriptionToken subscribe(const std::string& topic, MessageCallback callback);
-    void unsubscribe(const std::string& topic, SubscriptionToken token);
+    // Static because subscriptions are shared
+    static SubscriptionToken subscribe(const std::string& topic, MessageCallback callback);
+    static void unsubscribe(const std::string& topic, SubscriptionToken token);
+    static void unsubscribe(const std::string& topic);
 
 protected:
-    void dispatch(const std::string& topic, const std::string& message);
+    // Dispatch is instance-based (context), but accesses shared data
+    static void dispatch(const std::string& topic, const std::string& message);
 
 private:
     struct SubscriberEntry {
@@ -36,9 +39,10 @@ private:
         MessageCallback callback;
     };
 
-    std::unordered_map<std::string, std::vector<SubscriberEntry>> m_subscriptions;
-    std::mutex m_mutex;
-    std::atomic<SubscriptionToken> m_nextToken{0};
+    // Shared state
+    static std::unordered_map<std::string, std::vector<SubscriberEntry>> m_subscriptions;
+    static std::mutex m_registryMutex;
+    static std::atomic<SubscriptionToken> m_nextToken;
 };
 
 /**
@@ -88,11 +92,14 @@ private:
     bool m_running;
 };
 
+// Default alias
 using MessageCenter = AsyncMessageCenter;
 
 //----------------------------------------------------------------
-// Helper "Tool" functions for MessageCenter (Inline for ease of use)
+// Helper "Tool" functions for MessageCenter
 //----------------------------------------------------------------
+
+// Publishing (Still distinguishes Sync vs Async behavior)
 
 inline void publish_message_sync(const std::string& topic, const std::string& message) {
     SyncMessageCenter::instance().publish(topic, message);
@@ -106,29 +113,18 @@ inline void publish_message(const std::string& topic, const std::string& message
     publish_message_async(topic, message);
 }
 
-inline MessageRegistry::SubscriptionToken subscribe_message_async(const std::string& topic, MessageRegistry::MessageCallback callback) {
-    return AsyncMessageCenter::instance().subscribe(topic, std::move(callback));
-}
+// Subscription (Unified - No distinction needed)
 
-inline MessageRegistry::SubscriptionToken subscribe_message_sync(const std::string& topic, MessageRegistry::MessageCallback callback) {
-    return SyncMessageCenter::instance().subscribe(topic, std::move(callback));
-}
-
-inline MessageRegistry::SubscriptionToken subscribe_message(const std::string& topic, MessageRegistry::MessageCallback callback) {
-    return subscribe_message_async(topic, std::move(callback));
-}
-
-inline void unsubscribe_message_async(const std::string& topic, MessageRegistry::SubscriptionToken token) {
-    AsyncMessageCenter::instance().unsubscribe(topic, token);
-}
-
-inline void unsubscribe_message_sync(const std::string& topic, MessageRegistry::SubscriptionToken token) {
-    SyncMessageCenter::instance().unsubscribe(topic, token);
+inline MessageCenter::SubscriptionToken subscribe_message(const std::string& topic, MessageCenter::MessageCallback callback) {
+    return MessageRegistry::subscribe(topic, std::move(callback));
 }
 
 inline void unsubscribe_message(const std::string& topic, MessageRegistry::SubscriptionToken token) {
-    unsubscribe_message_async(topic, token);
+    MessageRegistry::unsubscribe(topic, token);
+}
+
+inline void unsubscribe_message(const std::string& topic) {
+    MessageRegistry::unsubscribe(topic);
 }
 
 } // namespace eventsystem
-

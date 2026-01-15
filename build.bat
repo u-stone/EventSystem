@@ -62,7 +62,7 @@ cmake --build . --config Debug --target main_app
 IF %ERRORLEVEL% NEQ 0 goto :error
 
 echo Building unit tests...
-cmake --build . --config Debug --target test_event_system
+cmake --build . --config Debug --target test_event_center
 IF %ERRORLEVEL% NEQ 0 goto :error
 
 echo Building message center tests...

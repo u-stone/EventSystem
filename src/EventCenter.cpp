@@ -6,6 +6,22 @@ namespace eventsystem {
 // EventRegistry
 // =========================================================
 
+// Define static members
+std::map<std::type_index, EventRegistry::InterfaceHandlers> EventRegistry::m_interfaceHandlers;
+std::map<std::type_index, std::map<SubscriptionHandle, EventRegistry::GenericCallback>> EventRegistry::m_callbackHandlers;
+std::map<SubscriptionHandle, std::type_index> EventRegistry::m_handleToEventTypeMap;
+std::atomic<SubscriptionHandle> EventRegistry::m_nextSubscriptionId{0};
+std::mutex EventRegistry::m_registryMutex;
+
+void EventRegistry::reset()
+{
+    std::lock_guard<std::mutex> lock(m_registryMutex);
+    m_interfaceHandlers.clear();
+    m_callbackHandlers.clear();
+    m_handleToEventTypeMap.clear();
+    // m_nextSubscriptionId = 0; // Optional: resetting ID might confuse existing tokens if not careful, but for full reset it's okay.
+}
+
 void EventRegistry::unregisterHandler(SubscriptionHandle handle)
 {
     std::lock_guard<std::mutex> lock(m_registryMutex);

@@ -6,12 +6,13 @@
 1.  **EventCenter (Type-based)**: 基于强类型的事件分发，利用 C++ 类型系统确保安全性和高性能。
 2.  **MessageCenter (String-based)**: 基于字符串 Topic 的观察者模式，适用于轻量级、高度松耦合的通知场景。
 
-系统支持**同步**与**完全异步**两种分发模式，内置后台工作线程处理异步任务，并具备内存安全管理、异常隔离及性能监控等企业级特性。本库支持作为 Windows DLL 导出，并可通过 CMake `FetchContent` 轻松集成。
+系统支持**同步**与**完全异步**两种分发模式，内置后台工作线程处理异步任务。本库支持作为 Windows DLL 导出，并可通过 CMake `FetchContent` 轻松集成。
 
 ## 2. 核心特性
 
 *   **双重模式**: 同时支持基于类型的事件 (`EventCenter`) 和基于字符串的消息 (`MessageCenter`)。
-*   **完全异步**: 事件发布是非阻塞的，支持延时投递。
+*   **统一订阅 (Unified Subscription)**: 订阅者无需关心事件的发布方式（同步或异步）。所有订阅均存储在共享的注册表中，既能接收异步推送，也能接收同步直调。
+*   **完全异步**: 提供内置工作线程，支持非阻塞的“即发即忘”模式及延时投递。
 *   **DLL 友好**: 妥善处理了 Windows 上的 DLL 导出与单例一致性问题。
 *   **命名空间**: 所有核心类及 Helper 工具函数均位于 `eventsystem` 命名空间下。
 
@@ -45,46 +46,68 @@ ctest -C Release
 
 ## 4. 快速上手
 
-### 4.1 EventCenter 用法 (基于类型)
 推荐在源文件中使用 `using namespace eventsystem;` 以简化 Helper 函数调用。
+
+### 4.1 EventCenter 用法 (基于类型)
 
 ```cpp
 #include "EventSystem/EventCenter.h"
+#include <iostream>
 
 struct LoginEvent { std::string user; };
 
-void demo() {
+void demo_event() {
     using namespace eventsystem;
 
-    // 订阅 (Helper 函数)
+    // 1. 订阅 (统一接口，无需区分 Sync/Async)
     auto handle = subscribe_event<LoginEvent>([](const LoginEvent& e) {
-        std::cout << "User " << e.user << " logged in" << std::endl;
+        std::cout << "User " << e.user << " logged in." << std::endl;
     });
 
-    // 发布 (Helper 函数)
+    // 2. 异步发布 (默认，不阻塞)
     publish_event(LoginEvent{"Alice"});
 
-    // 延时发布
+    // 3. 延时 500ms 发布
     publish_event_delayed(LoginEvent{"Bob"}, std::chrono::milliseconds(500));
+
+    // 4. 同步发布 (立即执行)
+    publish_event_sync(LoginEvent{"Charlie"});
+
+    // 5. 注销
+    unsubscribe_event(handle);
 }
 ```
 
 ### 4.2 MessageCenter 用法 (基于字符串)
+
 ```cpp
 #include "EventSystem/MessageCenter.h"
+#include <iostream>
 
 void demo_message() {
-    // 也可以直接通过命名空间调用
-    auto token = eventsystem::subscribe_message("system_status", [](const std::string& msg) {
+    using namespace eventsystem;
+
+    // 1. 订阅
+    auto token = subscribe_message("system_status", [](const std::string& msg) {
         std::cout << "Status: " << msg << std::endl;
     });
 
-    eventsystem::publish_message("system_status", "Running");
+    // 2. 发布 (异步)
+    publish_message("system_status", "Running");
+
+    // 3. 发布 (同步)
+    publish_message_sync("system_status", "Updated");
+
+    // 4. 注销 (指定 Token)
+    unsubscribe_message("system_status", token);
+    
+    // 或者注销该 Topic 下的所有订阅者
+    // unsubscribe_message("system_status"); 
 }
 ```
 
 ## 5. 目录结构
-*   `include/EventSystem/`: 公共头文件。
+*   `include/EventSystem/`: 公共头文件 (`EventCenter.h`, `MessageCenter.h`, `Export.h`)。
 *   `src/`: 库实现文件。
 *   `examples/`: 示例程序。
 *   `tests/`: 单元测试。

@@ -33,17 +33,17 @@ public:
 };
 
 //----------------------------------------------------------------
-// EventRegistry: Manages event subscriptions and dispatching logic.
+// EventRegistry: Manages shared event subscriptions for all event centers.
 //----------------------------------------------------------------
 class EVENTSYSTEM_API EventRegistry
 {
 public:
     virtual ~EventRegistry() = default;
 
-    // --- IEventHandler-based Subscription ---
+    // --- IEventHandler-based Subscription (Static / Shared) ---
 
     template <typename TEvent>
-    void registerHandler(const std::shared_ptr<IEventHandler> &handler)
+    static void registerHandler(const std::shared_ptr<IEventHandler> &handler)
     {
         std::type_index eventType = std::type_index(typeid(TEvent));
         std::lock_guard<std::mutex> lock(m_registryMutex);
@@ -51,7 +51,7 @@ public:
     }
 
     template <typename TEvent>
-    void registerWeakHandler(const std::shared_ptr<IEventHandler> &handler)
+    static void registerWeakHandler(const std::shared_ptr<IEventHandler> &handler)
     {
         std::type_index eventType = std::type_index(typeid(TEvent));
         std::lock_guard<std::mutex> lock(m_registryMutex);
@@ -59,7 +59,7 @@ public:
     }
 
     template <typename TEvent>
-    void unregisterHandler(const std::shared_ptr<IEventHandler> &handler)
+    static void unregisterHandler(const std::shared_ptr<IEventHandler> &handler)
     {
         std::type_index eventType = std::type_index(typeid(TEvent));
         std::lock_guard<std::mutex> lock(m_registryMutex);
@@ -81,9 +81,9 @@ public:
         }
     }
 
-    // --- Callback-based Subscription ---
+    // --- Callback-based Subscription (Static / Shared) ---
     template <typename TEvent>
-    SubscriptionHandle registerHandler(std::function<void(const TEvent &)> callback)
+    static SubscriptionHandle registerHandler(std::function<void(const TEvent &)> callback)
     {
         std::type_index eventType = std::type_index(typeid(TEvent));
         SubscriptionHandle handle = m_nextSubscriptionId++;
@@ -101,10 +101,10 @@ public:
         return handle;
     }
 
-    void unregisterHandler(SubscriptionHandle handle);
+    static void unregisterHandler(SubscriptionHandle handle);
 
     template <typename TEvent>
-    void unregisterAllHandlers()
+    static void unregisterAllHandlers()
     {
         std::type_index eventType = std::type_index(typeid(TEvent));
         std::lock_guard<std::mutex> lock(m_registryMutex);
@@ -122,8 +122,11 @@ public:
         m_interfaceHandlers.erase(eventType);
     }
 
+    // Clears all subscriptions (for testing or system reset)
+    static void reset();
+
 protected:
-    void dispatchEvent(const std::any &eventData, const std::type_index &eventType);
+    static void dispatchEvent(const std::any &eventData, const std::type_index &eventType);
 
     struct InterfaceHandlers
     {
@@ -133,11 +136,12 @@ protected:
 
     using GenericCallback = std::function<void(const std::any &)>;
 
-    std::map<std::type_index, InterfaceHandlers> m_interfaceHandlers;
-    std::map<std::type_index, std::map<SubscriptionHandle, GenericCallback>> m_callbackHandlers;
-    std::map<SubscriptionHandle, std::type_index> m_handleToEventTypeMap;
-    std::atomic<SubscriptionHandle> m_nextSubscriptionId{0};
-    std::mutex m_registryMutex;
+    // Shared State
+    static std::map<std::type_index, InterfaceHandlers> m_interfaceHandlers;
+    static std::map<std::type_index, std::map<SubscriptionHandle, GenericCallback>> m_callbackHandlers;
+    static std::map<SubscriptionHandle, std::type_index> m_handleToEventTypeMap;
+    static std::atomic<SubscriptionHandle> m_nextSubscriptionId;
+    static std::mutex m_registryMutex;
 };
 
 //----------------------------------------------------------------
@@ -248,26 +252,26 @@ using EventCenter = AsyncEventCenter;
 template <typename TEvent>
 void publish_event_sync(const TEvent &event)
 {
-    SyncEventCenter::instance().publish_event(event);
+    eventsystem::SyncEventCenter::instance().publish_event(event);
 }
 
 // --- Asynchronous Publishing ---
 template <typename TEvent>
 void publish_event_async(const TEvent &event)
 {
-    AsyncEventCenter::instance().publish_event(event);
+    eventsystem::AsyncEventCenter::instance().publish_event(event);
 }
 
 template <typename TEvent>
 void publish_event_delayed_async(const TEvent &event, std::chrono::milliseconds delay)
 {
-    AsyncEventCenter::instance().publish_event_delayed(event, delay);
+    eventsystem::AsyncEventCenter::instance().publish_event_delayed(event, delay);
 }
 
 template <typename TEvent>
 void publish_event_at_async(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
 {
-    AsyncEventCenter::instance().publish_event_at(event, timePoint);
+    eventsystem::AsyncEventCenter::instance().publish_event_at(event, timePoint);
 }
 
 // --- Default/Legacy Aliases ---
@@ -291,49 +295,28 @@ void publish_event_at(const TEvent &event, const std::chrono::steady_clock::time
 
 inline void cancelAllEvents()
 {
-    EventCenter::instance().cancelAllEvents();
+    eventsystem::EventCenter::instance().cancelAllEvents();
 }
 
 // --- Helper "Tool" functions for convenient EventCenter registration ---
 
+// Unified Subscription (Async/Sync agnostic)
 template <typename TEvent>
-SubscriptionHandle subscribe_event_async(std::function<void(const TEvent&)> callback)
+eventsystem::SubscriptionHandle subscribe_event(std::function<void(const TEvent&)> callback)
 {
-    return AsyncEventCenter::instance().registerHandler<TEvent>(std::move(callback));
+    return eventsystem::EventRegistry::registerHandler<TEvent>(std::move(callback));
 }
 
-template <typename TEvent>
-SubscriptionHandle subscribe_event_sync(std::function<void(const TEvent&)> callback)
+inline void unsubscribe_event(eventsystem::SubscriptionHandle handle)
 {
-    return SyncEventCenter::instance().registerHandler<TEvent>(std::move(callback));
-}
-
-template <typename TEvent>
-SubscriptionHandle subscribe_event(std::function<void(const TEvent&)> callback)
-{
-    return subscribe_event_async<TEvent>(std::move(callback));
-}
-
-inline void unsubscribe_event_async(SubscriptionHandle handle)
-{
-    AsyncEventCenter::instance().unregisterHandler(handle);
-}
-
-inline void unsubscribe_event_sync(SubscriptionHandle handle)
-{
-    SyncEventCenter::instance().unregisterHandler(handle);
-}
-
-inline void unsubscribe_event(SubscriptionHandle handle)
-{
-    unsubscribe_event_async(handle);
+    eventsystem::EventRegistry::unregisterHandler(handle);
 }
 
 // --- Static Handler Registration ---
 template <typename TEvent>
-SubscriptionHandle registerStaticEventHandler()
+eventsystem::SubscriptionHandle registerStaticEventHandler()
 {
-    return EventCenter::instance().registerHandler<TEvent>(&TEvent::handle);
+    return eventsystem::EventRegistry::registerHandler<TEvent>(&TEvent::handle);
 }
 
 } // namespace eventsystem

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <vector>
 
 using namespace eventsystem;
 
@@ -42,10 +43,12 @@ protected:
     void SetUp() override {
         EventCenter::destroy();
         SyncEventCenter::destroy();
+        EventRegistry::reset();
     }
     void TearDown() override {
         EventCenter::destroy();
         SyncEventCenter::destroy();
+        EventRegistry::reset();
     }
 };
 
@@ -353,6 +356,7 @@ TEST_F(EventSystemTest, SingletonDestruction) {
 
     // Destroy the singleton
     EventCenter::destroy();
+    EventRegistry::reset(); // Clear static handlers to simulate full system reset
 
     // Get a new instance
 
@@ -387,4 +391,96 @@ TEST_F(EventSystemTest, DestructorCancelsPendingEvents) {
     // Assertion: Destruction should be immediate (e.g., < 200ms), not 2 seconds.
     EXPECT_LT(elapsed.count(), 200);
     EXPECT_FALSE(executed);
+}
+
+// --- Multi-threaded Tests ---
+
+TEST_F(EventSystemTest, ConcurrentRegistration) {
+    // Test robustness when multiple threads register/unregister handlers while events are processed.
+    std::atomic<int> received_count{0};
+    std::atomic<bool> running{true};
+    const int num_publisher_threads = 4;
+    const int num_registry_threads = 4;
+
+    // Publisher threads
+    std::vector<std::thread> publishers;
+    for (int i = 0; i < num_publisher_threads; ++i) {
+        publishers.emplace_back([&]() {
+            while (running) {
+                publish_event(TestEvent1{1});
+                std::this_thread::yield();
+            }
+        });
+    }
+
+    // Registry threads: rapidly add/remove handlers
+    std::vector<std::thread> registrars;
+    for (int i = 0; i < num_registry_threads; ++i) {
+        registrars.emplace_back([&]() {
+            while (running) {
+                auto h = EventRegistry::registerHandler<TestEvent1>([&](const TestEvent1&) {
+                    received_count.fetch_add(1, std::memory_order_relaxed);
+                });
+                // Small sleep to allow some events to be processed
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
+                EventRegistry::unregisterHandler(h);
+            }
+        });
+    }
+
+    // Run for a while
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    running = false;
+
+    for (auto& t : publishers) t.join();
+    for (auto& t : registrars) t.join();
+
+    // Verify system is still responsive
+    TestSync sync;
+    auto h = EventRegistry::registerHandler<TestEvent1>([&](const TestEvent1&) {
+        sync.notify();
+    });
+    publish_event(TestEvent1{1});
+    EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
+    EventRegistry::unregisterHandler(h);
+}
+
+TEST_F(EventSystemTest, MixedWorkload) {
+    // A chaos test mixing delayed, immediate events, and registration.
+    std::atomic<int> total_processed{0};
+    std::atomic<bool> running{true};
+    
+    auto main_handler = EventRegistry::registerHandler<TestEvent1>([&](const TestEvent1& e) {
+        total_processed.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 4; ++i) {
+        workers.emplace_back([&, i]() {
+            while (running) {
+                if (i % 2 == 0) {
+                    publish_event(TestEvent1{i});
+                } else {
+                    publish_event_delayed(TestEvent1{i}, std::chrono::milliseconds(1 + (i*10)));
+                }
+                
+                // Occasional sync publish
+                if (i == 0) {
+                    publish_event_sync(TestEvent1{i});
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    running = false;
+    for (auto& t : workers) t.join();
+
+    // Ensure we processed something
+    EXPECT_GT(total_processed.load(), 0);
+    
+    // Cleanup
+    EventRegistry::unregisterHandler(main_handler);
 }
