@@ -1,24 +1,29 @@
-# C++17 Asynchronous Event System (NotifyCenter)
+# C++17 Asynchronous Event System
 
 ## 1. 项目简介
 **EventSystem** 是一个基于 C++17 标准开发的高性能、线程安全、支持多范式的事件分发系统。它提供了两种核心模式，以满足不同场景下的解耦通信需求：
 
 1.  **EventCenter (Type-based)**: 基于强类型的事件分发，利用 C++ 类型系统确保安全性和高性能。
-2.  **MessageCenter (String-based)**: 基于字符串 Topic 的观察者模式，适用于轻量级、高度松耦合的通知场景。
+2.  **MessageCenter (String-based)**: 基于字符串 Topic 的观察者模式，支持任意参数类型的回调 (Variadic Args)。
 
-系统支持**同步**与**完全异步**两种分发模式，内置后台工作线程处理异步任务。本库支持作为 Windows DLL 导出，并可通过 CMake `FetchContent` 轻松集成。
+系统支持**同步**与**完全异步**两种分发模式，内置后台工作线程处理异步任务。
 
 ## 2. 核心特性
 
 *   **双重模式**: 同时支持基于类型的事件 (`EventCenter`) 和基于字符串的消息 (`MessageCenter`)。
-*   **统一订阅 (Unified Subscription)**: 订阅者无需关心事件的发布方式（同步或异步）。所有订阅均存储在共享的注册表中，既能接收异步推送，也能接收同步直调。
+*   **灵活参数**: `MessageCenter` 支持 0 到 N 个任意类型的参数传递。
+*   **统一订阅**: 订阅者无需关心事件的发布方式（同步或异步），共享同一个注册表。
 *   **完全异步**: 提供内置工作线程，支持非阻塞的“即发即忘”模式及延时投递。
 *   **DLL 友好**: 妥善处理了 Windows 上的 DLL 导出与单例一致性问题。
-*   **命名空间**: 所有核心类及 Helper 工具函数均位于 `eventsystem` 命名空间下。
 
-## 3. 集成方式
+## 3. 文档与指南
 
-### 3.1 通过 FetchContent 集成 (推荐)
+*   📖 **[用户使用指南 (User Guide)](docs/User_Guide.md)**: 详细的 API 使用说明和示例代码。
+*   ⚙️ **[MessageCenter 设计详解](docs/MessageCenter_Design.md)**: 关于变参模板与类型擦除的实现细节。
+
+## 4. 集成方式
+
+### 4.1 通过 FetchContent 集成 (推荐)
 在您的 `CMakeLists.txt` 中添加以下代码：
 
 ```cmake
@@ -27,16 +32,15 @@ include(FetchContent)
 FetchContent_Declare(
   EventSystem
   GIT_REPOSITORY https://github.com/YourUsername/EventSystem.git
-  GIT_TAG        main # 或者指定的 commit hash / tag
+  GIT_TAG        main
 )
 
 FetchContent_MakeAvailable(EventSystem)
 
-# 链接到您的目标
 target_link_libraries(your_target PRIVATE eventsystem::eventsystem)
 ```
 
-### 3.2 手动构建与安装
+### 4.2 手动构建
 ```bash
 mkdir build && cd build
 cmake .. -DBUILD_SHARED_LIBS=ON
@@ -44,70 +48,9 @@ cmake --build . --config Release
 ctest -C Release
 ```
 
-## 4. 快速上手
-
-推荐在源文件中使用 `using namespace eventsystem;` 以简化 Helper 函数调用。
-
-### 4.1 EventCenter 用法 (基于类型)
-
-```cpp
-#include "EventSystem/EventCenter.h"
-#include <iostream>
-
-struct LoginEvent { std::string user; };
-
-void demo_event() {
-    using namespace eventsystem;
-
-    // 1. 订阅 (统一接口，无需区分 Sync/Async)
-    auto handle = subscribe_event<LoginEvent>([](const LoginEvent& e) {
-        std::cout << "User " << e.user << " logged in." << std::endl;
-    });
-
-    // 2. 异步发布 (默认，不阻塞)
-    publish_event(LoginEvent{"Alice"});
-
-    // 3. 延时 500ms 发布
-    publish_event_delayed(LoginEvent{"Bob"}, std::chrono::milliseconds(500));
-
-    // 4. 同步发布 (立即执行)
-    publish_event_sync(LoginEvent{"Charlie"});
-
-    // 5. 注销
-    unsubscribe_event(handle);
-}
-```
-
-### 4.2 MessageCenter 用法 (基于字符串)
-
-```cpp
-#include "EventSystem/MessageCenter.h"
-#include <iostream>
-
-void demo_message() {
-    using namespace eventsystem;
-
-    // 1. 订阅
-    auto token = subscribe_message("system_status", [](const std::string& msg) {
-        std::cout << "Status: " << msg << std::endl;
-    });
-
-    // 2. 发布 (异步)
-    publish_message("system_status", "Running");
-
-    // 3. 发布 (同步)
-    publish_message_sync("system_status", "Updated");
-
-    // 4. 注销 (指定 Token)
-    unsubscribe_message("system_status", token);
-    
-    // 或者注销该 Topic 下的所有订阅者
-    // unsubscribe_message("system_status"); 
-}
-```
-
 ## 5. 目录结构
-*   `include/EventSystem/`: 公共头文件 (`EventCenter.h`, `MessageCenter.h`, `Export.h`)。
+*   `include/EventSystem/`: 公共头文件。
 *   `src/`: 库实现文件。
-*   `examples/`: 示例程序。
+*   `examples/`: 示例程序 (`main.cpp`)。
 *   `tests/`: 单元测试。
+*   `docs/`: 详细文档。

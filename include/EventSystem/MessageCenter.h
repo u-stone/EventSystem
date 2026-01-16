@@ -10,121 +10,175 @@
 #include <thread>
 #include <queue>
 #include <condition_variable>
+#include <any>
+#include <iostream>
+#include <typeindex>
 
 namespace eventsystem {
 
 /**
- * @brief MessageRegistry manages the shared subscriptions for all message centers.
- * Subscriptions are shared across Sync and Async centers.
+ * @brief MessageCenter: A robust, thread-safe, string-topic based event system.
+ * Supports synchronous and asynchronous dispatch with arbitrary argument lists.
  */
-class EVENTSYSTEM_API MessageRegistry {
+class EVENTSYSTEM_API MessageCenter {
 public:
-    using MessageCallback = std::function<void(const std::string&)>;
     using SubscriptionToken = size_t;
 
-    virtual ~MessageRegistry() = default;
+    static MessageCenter& instance();
 
-    // Static because subscriptions are shared
-    static SubscriptionToken subscribe(const std::string& topic, MessageCallback callback);
-    static void unsubscribe(const std::string& topic, SubscriptionToken token);
-    static void unsubscribe(const std::string& topic);
+    MessageCenter(const MessageCenter&) = delete;
+    MessageCenter& operator=(const MessageCenter&) = delete;
 
-protected:
-    // Dispatch is instance-based (context), but accesses shared data
-    static void dispatch(const std::string& topic, const std::string& message);
+    ~MessageCenter();
+
+    /**
+     * @brief Subscribe to a topic with a specific function signature.
+     * Usage: subscribe<int, std::string>("topic", [](int a, std::string b){ ... });
+     */
+    template <typename... Args>
+    SubscriptionToken subscribe(const std::string& topic, std::function<void(Args...)> callback) {
+        std::lock_guard<std::mutex> lock(m_registryMutex);
+        SubscriptionToken token = m_nextToken++;
+        // We store the std::function<void(Args...)> inside std::any
+        m_subscriptions[topic].push_back({token, std::any(callback)});
+        return token;
+    }
+
+    /**
+     * @brief Subscribe overload for simple lambdas where types are explicit in the lambda? 
+     * C++17 deduction from lambda is tricky. We encourage using the template version or std::function.
+     */
+
+    void unsubscribe(const std::string& topic, SubscriptionToken token);
+    void unsubscribe(const std::string& topic);
+
+    /**
+     * @brief Publish a message synchronously.
+     * The subscribers must match the exact signature of arguments provided.
+     */
+    template <typename... Args>
+    void publishSync(const std::string& topic, Args&&... args) {
+        dispatch<typename std::decay<Args>::type...>(topic, std::forward<Args>(args)...);
+    }
+
+    /**
+     * @brief Publish a message asynchronously.
+     * Arguments are copied/moved into the queue.
+     */
+    template <typename... Args>
+    void publishAsync(const std::string& topic, Args&&... args) {
+        // Capture arguments by value (decayed) to ensure they survive until execution
+        auto task = [this, topic, args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
+            std::apply([this, &topic](auto&&... unpackedArgs) {
+                this->dispatch<typename std::decay<Args>::type...>(topic, std::forward<decltype(unpackedArgs)>(unpackedArgs)...);
+            }, std::move(args));
+        };
+
+        {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
+            m_queue.emplace(std::move(task));
+        }
+        m_cv.notify_one();
+    }
+
+    // Default publish is Async
+    template <typename... Args>
+    void publish(const std::string& topic, Args&&... args) {
+        publishAsync(topic, std::forward<Args>(args)...);
+    }
 
 private:
-    struct SubscriberEntry {
-        SubscriptionToken id;
-        MessageCallback callback;
-    };
-
-    // Shared state
-    static std::unordered_map<std::string, std::vector<SubscriberEntry>> m_subscriptions;
-    static std::mutex m_registryMutex;
-    static std::atomic<SubscriptionToken> m_nextToken;
-};
-
-/**
- * @brief SyncMessageCenter dispatches messages immediately on the calling thread.
- */
-class EVENTSYSTEM_API SyncMessageCenter : public MessageRegistry {
-public:
-    static SyncMessageCenter& instance();
-
-    void publish(const std::string& topic, const std::string& message);
-
-private:
-    SyncMessageCenter() = default;
-    ~SyncMessageCenter() = default;
-    SyncMessageCenter(const SyncMessageCenter&) = delete;
-    SyncMessageCenter& operator=(const SyncMessageCenter&) = delete;
-};
-
-/**
- * @brief AsyncMessageCenter dispatches messages using a background worker thread.
- */
-class EVENTSYSTEM_API AsyncMessageCenter : public MessageRegistry {
-public:
-    static AsyncMessageCenter& instance();
-
-    void publish(const std::string& topic, const std::string& message);
+    MessageCenter();
     void stop();
-
-private:
-    AsyncMessageCenter();
-    ~AsyncMessageCenter();
-
-    AsyncMessageCenter(const AsyncMessageCenter&) = delete;
-    AsyncMessageCenter& operator=(const AsyncMessageCenter&) = delete;
-
-    struct MessageTask {
-        std::string topic;
-        std::string message;
-    };
-
     void workerLoop();
 
-    std::queue<MessageTask> m_queue;
+    // Internal generic dispatch logic
+    template <typename... Args>
+    void dispatch(const std::string& topic, Args... args) {
+        // Copy callbacks to avoid holding lock during execution
+        std::vector<std::any> callbacksToInvoke;
+        {
+            std::lock_guard<std::mutex> lock(m_registryMutex);
+            auto it = m_subscriptions.find(topic);
+            if (it != m_subscriptions.end()) {
+                for (const auto& entry : it->second) {
+                    callbacksToInvoke.push_back(entry.callback);
+                }
+            }
+        }
+
+        // Execute
+        for (const auto& anyCb : callbacksToInvoke) {
+            try {
+                // Try to cast to the exact function signature
+                using FunctionType = std::function<void(Args...)>;
+                // Note: std::any_cast throws bad_any_cast if type doesn't match exactly.
+                // We want to skip mismatches silently (or log debug), not crash.
+                // However, any_cast on pointer returns nullptr if mismatch.
+                if (auto* func = std::any_cast<FunctionType>(&anyCb)) {
+                    (*func)(args...);
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "[MessageCenter] Exception during dispatch for '" << topic << "': " << e.what() << std::endl;
+            }
+        }
+    }
+
+    struct SubscriberEntry {
+        SubscriptionToken id;
+        std::any callback; // Stores std::function<void(Args...)>
+    };
+
+    std::unordered_map<std::string, std::vector<SubscriberEntry>> m_subscriptions;
+    std::mutex m_registryMutex;
+    std::atomic<SubscriptionToken> m_nextToken{0};
+
+    // Async Queue holds generic void() functors (closures)
+    std::queue<std::function<void()>> m_queue;
     std::mutex m_queueMutex;
     std::condition_variable m_cv;
     std::thread m_worker;
     bool m_running;
 };
 
-// Default alias
-using MessageCenter = AsyncMessageCenter;
-
 //----------------------------------------------------------------
-// Helper "Tool" functions for MessageCenter
+// Helper "Tool" functions
 //----------------------------------------------------------------
 
-// Publishing (Still distinguishes Sync vs Async behavior)
-
-inline void publish_message_sync(const std::string& topic, const std::string& message) {
-    SyncMessageCenter::instance().publish(topic, message);
+// Unified Subscribe (Template)
+// Usage: subscribe_message<int>("topic", [](int i){...})
+template <typename... Args, typename Callback>
+MessageCenter::SubscriptionToken subscribe_message(const std::string& topic, Callback&& callback) {
+    return MessageCenter::instance().subscribe<Args...>(topic, std::function<void(Args...)>(std::forward<Callback>(callback)));
 }
 
-inline void publish_message_async(const std::string& topic, const std::string& message) {
-    AsyncMessageCenter::instance().publish(topic, message);
+// Explicit overload for std::string (Legacy support for simple lambdas without template args)
+inline MessageCenter::SubscriptionToken subscribe_message(const std::string& topic, std::function<void(const std::string&)> callback) {
+    return MessageCenter::instance().subscribe<std::string>(topic, std::move(callback));
 }
 
-inline void publish_message(const std::string& topic, const std::string& message) {
-    publish_message_async(topic, message);
+// Publish wrappers
+template <typename... Args>
+void publish_message(const std::string& topic, Args&&... args) {
+    MessageCenter::instance().publishAsync(topic, std::forward<Args>(args)...);
 }
 
-// Subscription (Unified - No distinction needed)
-
-inline MessageCenter::SubscriptionToken subscribe_message(const std::string& topic, MessageCenter::MessageCallback callback) {
-    return MessageRegistry::subscribe(topic, std::move(callback));
+template <typename... Args>
+void publish_message_async(const std::string& topic, Args&&... args) {
+    MessageCenter::instance().publishAsync(topic, std::forward<Args>(args)...);
 }
 
-inline void unsubscribe_message(const std::string& topic, MessageRegistry::SubscriptionToken token) {
-    MessageRegistry::unsubscribe(topic, token);
+template <typename... Args>
+void publish_message_sync(const std::string& topic, Args&&... args) {
+    MessageCenter::instance().publishSync(topic, std::forward<Args>(args)...);
+}
+
+inline void unsubscribe_message(const std::string& topic, MessageCenter::SubscriptionToken token) {
+    MessageCenter::instance().unsubscribe(topic, token);
 }
 
 inline void unsubscribe_message(const std::string& topic) {
-    MessageRegistry::unsubscribe(topic);
+    MessageCenter::instance().unsubscribe(topic);
 }
 
 } // namespace eventsystem
