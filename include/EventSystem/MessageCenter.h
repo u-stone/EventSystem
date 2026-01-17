@@ -37,11 +37,7 @@ public:
      */
     template <typename... Args>
     SubscriptionToken subscribe(const std::string& topic, std::function<void(Args...)> callback) {
-        std::lock_guard<std::mutex> lock(m_registryMutex);
-        SubscriptionToken token = m_nextToken++;
-        // We store the std::function<void(Args...)> inside std::any
-        m_subscriptions[topic].push_back({token, std::any(callback)});
-        return token;
+        return subscribeImpl(topic, std::any(callback));
     }
 
     /**
@@ -74,11 +70,7 @@ public:
             }, std::move(args));
         };
 
-        {
-            std::lock_guard<std::mutex> lock(m_queueMutex);
-            m_queue.emplace(std::move(task));
-        }
-        m_cv.notify_one();
+        queueTask(std::move(task));
     }
 
     // Default publish is Async
@@ -89,23 +81,12 @@ public:
 
 private:
     MessageCenter();
-    void stop();
-    void workerLoop();
-
+    
     // Internal generic dispatch logic
     template <typename... Args>
     void dispatch(const std::string& topic, Args... args) {
-        // Copy callbacks to avoid holding lock during execution
-        std::vector<std::any> callbacksToInvoke;
-        {
-            std::lock_guard<std::mutex> lock(m_registryMutex);
-            auto it = m_subscriptions.find(topic);
-            if (it != m_subscriptions.end()) {
-                for (const auto& entry : it->second) {
-                    callbacksToInvoke.push_back(entry.callback);
-                }
-            }
-        }
+        // Get callbacks via Pimpl helper
+        auto callbacksToInvoke = getSubscribers(topic);
 
         // Execute
         for (const auto& anyCb : callbacksToInvoke) {
@@ -124,21 +105,16 @@ private:
         }
     }
 
-    struct SubscriberEntry {
-        SubscriptionToken id;
-        std::any callback; // Stores std::function<void(Args...)>
-    };
+    struct Impl;
+#pragma warning(push)
+#pragma warning(disable: 4251)
+    std::unique_ptr<Impl> m_impl;
+#pragma warning(pop)
 
-    std::unordered_map<std::string, std::vector<SubscriberEntry>> m_subscriptions;
-    std::mutex m_registryMutex;
-    std::atomic<SubscriptionToken> m_nextToken{0};
-
-    // Async Queue holds generic void() functors (closures)
-    std::queue<std::function<void()>> m_queue;
-    std::mutex m_queueMutex;
-    std::condition_variable m_cv;
-    std::thread m_worker;
-    bool m_running;
+    // Helper methods for Pimpl
+    SubscriptionToken subscribeImpl(const std::string& topic, std::any callback);
+    std::vector<std::any> getSubscribers(const std::string& topic);
+    void queueTask(std::function<void()> task);
 };
 
 //----------------------------------------------------------------

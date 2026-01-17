@@ -13,11 +13,16 @@
 
 ### 2.1 存储机制：Type Erasure (类型擦除)
 由于 C++ 是强类型语言，`std::vector` 只能存储相同类型的对象。为了在一个容器中存储不同签名的回调函数（如 `std::function<void()>` 和 `std::function<void(int)>`），我们使用了 **`std::any`**。
+此外，为了隐藏 `std::unordered_map` 等 STL 容器（解决 DLL 导出警告），我们采用了 **Pimpl (Pointer to Implementation)** 惯用语。
 
 ```cpp
-struct SubscriberEntry {
-    SubscriptionToken id;
-    std::any callback; // 实际上存储的是 std::function<void(Args...)>
+// 位于 .cpp 内部的 Impl 结构
+struct MessageCenter::Impl {
+    struct SubscriberEntry {
+        SubscriptionToken id;
+        std::any callback; // 实际上存储的是 std::function<void(Args...)>
+    };
+    std::unordered_map<std::string, std::vector<SubscriberEntry>> m_subscriptions;
 };
 ```
 通过 `std::any`，我们将具体的函数类型信息擦除，统一存储为 `std::any` 对象。
