@@ -1,37 +1,119 @@
 #include "EventSystem/EventCenter.h"
+#include <typeindex>
+#include <map>
+#include <mutex>
+#include <atomic>
+#include <vector>
+#include <queue>
+#include <thread>
+#include <condition_variable>
+#include <algorithm>
+#include <iostream>
 
 namespace eventsystem {
 
 // =========================================================
-// EventRegistry
+// Internal Storage (Pimpl for Static Registry)
 // =========================================================
 
-// Define static members
-std::map<std::type_index, EventRegistry::InterfaceHandlers> EventRegistry::m_interfaceHandlers;
-std::map<std::type_index, std::map<SubscriptionHandle, EventRegistry::GenericCallback>> EventRegistry::m_callbackHandlers;
-std::map<SubscriptionHandle, std::type_index> EventRegistry::m_handleToEventTypeMap;
-std::atomic<SubscriptionHandle> EventRegistry::m_nextSubscriptionId{0};
-std::mutex EventRegistry::m_registryMutex;
+namespace {
 
-void EventRegistry::reset()
+    struct RegistryStorage
+    {
+        std::vector<std::shared_ptr<IEventHandler>> strongRefs;
+        std::vector<std::weak_ptr<IEventHandler>> weakRefs;
+    };
+
+    using GenericCallback = std::function<void(const std::any &)>;
+
+    // Global state for EventRegistry (Hidden from DLL interface)
+    std::map<std::type_index, RegistryStorage> g_interfaceHandlers;
+    std::map<std::type_index, std::map<SubscriptionHandle, GenericCallback>> g_callbackHandlers;
+    std::map<SubscriptionHandle, std::type_index> g_handleToEventTypeMap;
+    std::atomic<SubscriptionHandle> g_nextSubscriptionId{0};
+    std::mutex g_registryMutex;
+
+} // namespace
+
+// =========================================================
+// EventRegistry Implementation
+// =========================================================
+
+void EventRegistry::registerHandlerImpl(std::type_index type, const std::shared_ptr<IEventHandler>& handler)
 {
-    std::lock_guard<std::mutex> lock(m_registryMutex);
-    m_interfaceHandlers.clear();
-    m_callbackHandlers.clear();
-    m_handleToEventTypeMap.clear();
-    // m_nextSubscriptionId = 0; // Optional: resetting ID might confuse existing tokens if not careful, but for full reset it's okay.
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    g_interfaceHandlers[type].strongRefs.push_back(handler);
+}
+
+void EventRegistry::registerWeakHandlerImpl(std::type_index type, const std::shared_ptr<IEventHandler>& handler)
+{
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    g_interfaceHandlers[type].weakRefs.push_back(handler);
+}
+
+void EventRegistry::unregisterHandlerImpl(std::type_index type, const std::shared_ptr<IEventHandler>& handler)
+{
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    auto it = g_interfaceHandlers.find(type);
+    if (it != g_interfaceHandlers.end())
+    {
+        auto &handlerGroup = it->second;
+        handlerGroup.strongRefs.erase(
+            std::remove(handlerGroup.strongRefs.begin(), handlerGroup.strongRefs.end(), handler),
+            handlerGroup.strongRefs.end());
+
+        handlerGroup.weakRefs.erase(
+            std::remove_if(handlerGroup.weakRefs.begin(), handlerGroup.weakRefs.end(),
+                           [&handler](const std::weak_ptr<IEventHandler> &weak)
+                           {
+                               return weak.expired() || weak.lock() == handler;
+                           }),
+            handlerGroup.weakRefs.end());
+    }
+}
+
+SubscriptionHandle EventRegistry::registerCallbackImpl(std::type_index type, GenericCallback callback)
+{
+    SubscriptionHandle handle = g_nextSubscriptionId++;
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    g_callbackHandlers[type][handle] = std::move(callback);
+    g_handleToEventTypeMap.emplace(handle, type);
+    return handle;
 }
 
 void EventRegistry::unregisterHandler(SubscriptionHandle handle)
 {
-    std::lock_guard<std::mutex> lock(m_registryMutex);
-    auto it = m_handleToEventTypeMap.find(handle);
-    if (it != m_handleToEventTypeMap.end())
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    auto it = g_handleToEventTypeMap.find(handle);
+    if (it != g_handleToEventTypeMap.end())
     {
         std::type_index eventType = it->second;
-        m_callbackHandlers[eventType].erase(handle);
-        m_handleToEventTypeMap.erase(it);
+        g_callbackHandlers[eventType].erase(handle);
+        g_handleToEventTypeMap.erase(it);
     }
+}
+
+void EventRegistry::unregisterAllHandlersImpl(std::type_index type)
+{
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    auto it_cb = g_callbackHandlers.find(type);
+    if (it_cb != g_callbackHandlers.end())
+    {
+        for (const auto &[handle, func] : it_cb->second)
+        {
+            g_handleToEventTypeMap.erase(handle);
+        }
+        g_callbackHandlers.erase(it_cb);
+    }
+    g_interfaceHandlers.erase(type);
+}
+
+void EventRegistry::reset()
+{
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    g_interfaceHandlers.clear();
+    g_callbackHandlers.clear();
+    g_handleToEventTypeMap.clear();
 }
 
 void EventRegistry::dispatchEvent(const std::any &eventData, const std::type_index &eventType)
@@ -41,19 +123,17 @@ void EventRegistry::dispatchEvent(const std::any &eventData, const std::type_ind
     std::vector<GenericCallback> callbacks;
 
     {
-        std::lock_guard<std::mutex> lock(m_registryMutex);
+        std::lock_guard<std::mutex> lock(g_registryMutex);
 
-        // 1. Collect IEventHandler subscribers
-        auto it_ih = m_interfaceHandlers.find(eventType);
-        if (it_ih != m_interfaceHandlers.end())
+        auto it_ih = g_interfaceHandlers.find(eventType);
+        if (it_ih != g_interfaceHandlers.end())
         {
-            strong_handlers = it_ih->second.strongRefs; // Copy
-            weak_handlers = it_ih->second.weakRefs;     // Copy
+            strong_handlers = it_ih->second.strongRefs;
+            weak_handlers = it_ih->second.weakRefs;
         }
 
-        // 2. Collect callback subscribers
-        auto it_cb = m_callbackHandlers.find(eventType);
-        if (it_cb != m_callbackHandlers.end())
+        auto it_cb = g_callbackHandlers.find(eventType);
+        if (it_cb != g_callbackHandlers.end())
         {
             for (const auto &pair : it_cb->second)
             {
@@ -62,7 +142,6 @@ void EventRegistry::dispatchEvent(const std::any &eventData, const std::type_ind
         }
     }
 
-    // Helper lambda to execute handlers safely with exception isolation and timing checks.
     auto safeInvoke = [&](const auto &action, const char *typeLabel)
     {
         try
@@ -71,7 +150,6 @@ void EventRegistry::dispatchEvent(const std::any &eventData, const std::type_ind
             action();
             auto end = std::chrono::steady_clock::now();
 
-            // Simple heuristic: if a handler takes > 500ms, warn about it.
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
             if (duration.count() > 500)
             {
@@ -89,7 +167,6 @@ void EventRegistry::dispatchEvent(const std::any &eventData, const std::type_ind
         }
     };
 
-    // Execute handlers outside the lock.
     for (const auto &handler : strong_handlers)
     {
         safeInvoke([&]() { handler->handle(eventData); }, "StrongHandler");
@@ -111,162 +188,166 @@ void EventRegistry::dispatchEvent(const std::any &eventData, const std::type_ind
 // SyncEventCenter
 // =========================================================
 
-std::atomic<SyncEventCenter *> SyncEventCenter::m_instance{nullptr};
-std::mutex SyncEventCenter::m_creationMutex;
-
 SyncEventCenter &SyncEventCenter::instance()
 {
-    SyncEventCenter *ptr = m_instance.load(std::memory_order_acquire);
-    if (!ptr)
-    {
-        std::lock_guard<std::mutex> lock(m_creationMutex);
-        ptr = m_instance.load(std::memory_order_relaxed);
-        if (!ptr)
-        {
-            ptr = new SyncEventCenter();
-            m_instance.store(ptr, std::memory_order_release);
-        }
-    }
-    return *ptr;
+    static SyncEventCenter instance;
+    return instance;
 }
 
 void SyncEventCenter::destroy()
 {
-    std::lock_guard<std::mutex> lock(m_creationMutex);
-    SyncEventCenter *ptr = m_instance.load(std::memory_order_acquire);
-    if (ptr)
-    {
-        delete ptr;
-        m_instance.store(nullptr, std::memory_order_release);
-    }
+    // Meyers Singleton handles destruction automatically.
 }
 
 // =========================================================
 // AsyncEventCenter
 // =========================================================
 
-std::atomic<AsyncEventCenter *> AsyncEventCenter::m_instance{nullptr};
-std::mutex AsyncEventCenter::m_creationMutex;
+struct AsyncEventCenter::Impl
+{
+    struct ScheduledEvent
+    {
+        std::chrono::steady_clock::time_point executionTime;
+        std::any eventData;
+        std::type_index eventType;
+
+        bool operator>(const ScheduledEvent &other) const
+        {
+            return executionTime > other.executionTime;
+        }
+    };
+
+    std::vector<ScheduledEvent> m_pendingEvents;
+    std::priority_queue<ScheduledEvent, std::vector<ScheduledEvent>, std::greater<ScheduledEvent>> m_scheduledQueue;
+    std::mutex m_queueMutex;
+    std::condition_variable m_condVar;
+
+    std::thread m_workerThread;
+    std::atomic<bool> m_done{false};
+    std::atomic<bool> m_threadRunning{false};
+    std::mutex m_threadMutex;
+
+    Impl() = default;
+
+    void ensureWorkerThread(AsyncEventCenter* parent)
+    {
+        if (!m_threadRunning)
+        {
+            std::lock_guard<std::mutex> lock(m_threadMutex);
+            if (!m_threadRunning)
+            {
+                m_done = false;
+                m_workerThread = std::thread(&Impl::processEvents, this);
+                m_threadRunning = true;
+            }
+        }
+    }
+
+    void stopWorkerThread()
+    {
+        std::lock_guard<std::mutex> lock(m_threadMutex);
+        if (m_threadRunning)
+        {
+            m_done = true;
+            m_condVar.notify_all();
+            if (m_workerThread.joinable())
+            {
+                m_workerThread.join();
+            }
+            m_threadRunning = false;
+        }
+    }
+
+    void processEvents()
+    {
+        while (true)
+        {
+            std::vector<ScheduledEvent> eventsToDispatch;
+
+            {
+                std::unique_lock<std::mutex> lock(m_queueMutex);
+
+                if (!m_pendingEvents.empty())
+                {
+                    for (auto &evt : m_pendingEvents)
+                    {
+                        m_scheduledQueue.push(std::move(evt));
+                    }
+                    m_pendingEvents.clear();
+                }
+
+                if (m_scheduledQueue.empty())
+                {
+                    m_condVar.wait(lock, [this] { return m_done || !m_pendingEvents.empty(); });
+                }
+                else
+                {
+                    m_condVar.wait_until(lock, m_scheduledQueue.top().executionTime, [this] { return m_done || !m_pendingEvents.empty(); });
+                }
+
+                if (m_done && m_pendingEvents.empty() && m_scheduledQueue.empty())
+                {
+                    return;
+                }
+
+                if (!m_pendingEvents.empty())
+                {
+                    continue;
+                }
+
+                auto now = std::chrono::steady_clock::now();
+                while (!m_scheduledQueue.empty() && m_scheduledQueue.top().executionTime <= now)
+                {
+                    eventsToDispatch.push_back(m_scheduledQueue.top());
+                    m_scheduledQueue.pop();
+                }
+            }
+
+            for (const auto &scheduledEvent : eventsToDispatch)
+            {
+                // Access base class method via scope resolution
+                EventRegistry::dispatchEvent(scheduledEvent.eventData, scheduledEvent.eventType);
+            }
+        }
+    }
+};
 
 AsyncEventCenter &AsyncEventCenter::instance()
 {
-    AsyncEventCenter *ptr = m_instance.load(std::memory_order_acquire);
-    if (!ptr)
-    {
-        std::lock_guard<std::mutex> lock(m_creationMutex);
-        ptr = m_instance.load(std::memory_order_relaxed);
-        if (!ptr)
-        {
-            ptr = new AsyncEventCenter();
-            m_instance.store(ptr, std::memory_order_release);
-        }
-    }
-    return *ptr;
+    static AsyncEventCenter instance;
+    return instance;
 }
 
 void AsyncEventCenter::destroy()
 {
-    std::lock_guard<std::mutex> lock(m_creationMutex);
-    AsyncEventCenter *ptr = m_instance.load(std::memory_order_acquire);
-    if (ptr)
-    {
-        delete ptr;
-        m_instance.store(nullptr, std::memory_order_release);
-    }
+}
+
+AsyncEventCenter::AsyncEventCenter() : m_impl(std::make_unique<Impl>())
+{
 }
 
 AsyncEventCenter::~AsyncEventCenter()
 {
     cancelAllEvents();
-    stopWorkerThread();
+    m_impl->stopWorkerThread();
 }
 
 void AsyncEventCenter::cancelAllEvents()
 {
-    std::lock_guard<std::mutex> lock(m_queueMutex);
-    m_pendingEvents.clear();
-    m_scheduledQueue = {};
+    std::lock_guard<std::mutex> lock(m_impl->m_queueMutex);
+    m_impl->m_pendingEvents.clear();
+    m_impl->m_scheduledQueue = {};
 }
 
-void AsyncEventCenter::ensureWorkerThread()
+void AsyncEventCenter::scheduleEvent(std::any event, std::type_index type, std::chrono::steady_clock::time_point timePoint)
 {
-    if (!m_threadRunning)
+    m_impl->ensureWorkerThread(this);
+    Impl::ScheduledEvent newEvent{timePoint, event, type};
     {
-        std::lock_guard<std::mutex> lock(m_threadMutex);
-        if (!m_threadRunning)
-        {
-            m_done = false;
-            m_workerThread = std::thread(&AsyncEventCenter::processEvents, this);
-            m_threadRunning = true;
-        }
+        std::lock_guard<std::mutex> lock(m_impl->m_queueMutex);
+        m_impl->m_pendingEvents.push_back(std::move(newEvent));
     }
-}
-
-void AsyncEventCenter::stopWorkerThread()
-{
-    std::lock_guard<std::mutex> lock(m_threadMutex);
-    if (m_threadRunning)
-    {
-        m_done = true;
-        m_condVar.notify_all();
-        if (m_workerThread.joinable())
-        {
-            m_workerThread.join();
-        }
-        m_threadRunning = false;
-    }
-}
-
-void AsyncEventCenter::processEvents()
-{
-    while (true)
-    {
-        std::vector<ScheduledEvent> eventsToDispatch;
-
-        {
-            std::unique_lock<std::mutex> lock(m_queueMutex);
-
-            if (!m_pendingEvents.empty())
-            {
-                for (auto &evt : m_pendingEvents)
-                {
-                    m_scheduledQueue.push(std::move(evt));
-                }
-                m_pendingEvents.clear();
-            }
-
-            if (m_scheduledQueue.empty())
-            {
-                m_condVar.wait(lock, [this] { return m_done || !m_pendingEvents.empty(); });
-            }
-            else
-            {
-                m_condVar.wait_until(lock, m_scheduledQueue.top().executionTime, [this] { return m_done || !m_pendingEvents.empty(); });
-            }
-
-            if (m_done && m_pendingEvents.empty() && m_scheduledQueue.empty())
-            {
-                return;
-            }
-
-            if (!m_pendingEvents.empty())
-            {
-                continue;
-            }
-
-            auto now = std::chrono::steady_clock::now();
-            while (!m_scheduledQueue.empty() && m_scheduledQueue.top().executionTime <= now)
-            {
-                eventsToDispatch.push_back(m_scheduledQueue.top());
-                m_scheduledQueue.pop();
-            }
-        }
-
-        for (const auto &scheduledEvent : eventsToDispatch)
-        {
-            dispatchEvent(scheduledEvent.eventData, scheduledEvent.eventType);
-        }
-    }
+    m_impl->m_condVar.notify_one();
 }
 
 } // namespace eventsystem

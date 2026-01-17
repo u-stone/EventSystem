@@ -31,12 +31,20 @@ public:
 };
 ```
 
-### 2.2 存储结构
-注册表主要维护以下映射：
+### 2.2 存储结构 (Internal Storage)
+为了确保二进制兼容性 (ABI Stability) 并消除 Windows DLL 导出警告 (C4251)，所有的存储容器均已移至 `EventCenter.cpp` 内部（Internal Linkage）。
+头文件中不再暴露 `std::map` 或 `std::vector` 成员。
+
 ```cpp
-// Key: 事件类型的 type_index
-// Value: 该事件的所有处理器列表
-static std::map<std::type_index, InterfaceHandlers> m_interfaceHandlers;
+// 伪代码 (位于 .cpp 内部)
+namespace {
+    struct RegistryStorage {
+        std::vector<std::shared_ptr<IEventHandler>> strongRefs;
+        std::vector<std::weak_ptr<IEventHandler>> weakRefs;
+    };
+    // 全局静态存储，对外不可见
+    std::map<std::type_index, RegistryStorage> g_interfaceHandlers;
+}
 ```
 
 ### 2.3 泛型适配器 (Handler Wrappers)

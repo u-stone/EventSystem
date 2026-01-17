@@ -23,7 +23,11 @@ REM Detect Visual Studio version
 set "VS_GENERATOR="
 
 REM Check for Visual Studio 2022
-
+"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -version "[17.0,18.0)" -property installationPath > nul 2> nul
+if %errorlevel% == 0 (
+    echo Found Visual Studio 2022.
+    set "VS_GENERATOR=Visual Studio 17 2022"
+) else (
     REM Check for Visual Studio 2019
     "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -version "[16.0,17.0)" -property installationPath > nul 2> nul
     if %errorlevel% == 0 (
@@ -37,7 +41,7 @@ REM Check for Visual Studio 2022
             set "VS_GENERATOR=Visual Studio 15 2017"
         )
     )
-
+) 
 
 if not defined VS_GENERATOR (
     echo Neither Visual Studio 2022, 2019, nor 2017 were found by vswhere.

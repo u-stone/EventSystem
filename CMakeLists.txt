@@ -30,13 +30,9 @@ if(EVENTSYSTEM_BUILD_TESTS)
     FetchContent_Declare(
       googletest
       URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+      DOWNLOAD_EXTRACT_TIMESTAMP true
     )
-    set(FETCHCONTENT_QUIET FALSE) 
-    FetchContent_GetProperties(googletest)
-    if(NOT googletest_POPULATED)
-      FetchContent_Populate(googletest)
-      add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
-    endif()
+    FetchContent_MakeAvailable(googletest)
     
     add_subdirectory(tests)
 endif()
