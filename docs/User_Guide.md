@@ -132,9 +132,6 @@ publish_message("topic", 3.14f);
 ```cpp
 // 注销单个订阅
 eventsystem::unsubscribe_message("topic", token);
-
-// 注销该 Topic 下的所有订阅者
-eventsystem::unsubscribe_message("topic");
 ```
 
 ---
