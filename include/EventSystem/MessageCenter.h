@@ -153,8 +153,4 @@ inline void unsubscribe_message(const std::string& topic, MessageCenter::Subscri
     MessageCenter::instance().unsubscribe(topic, token);
 }
 
-inline void unsubscribe_message(const std::string& topic) {
-    MessageCenter::instance().unsubscribe(topic);
-}
-
 } // namespace eventsystem

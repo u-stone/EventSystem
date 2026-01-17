@@ -4,6 +4,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <functional> // For std::bind
 
 using namespace eventsystem;
 
@@ -13,6 +14,24 @@ protected:
         // No explicit reset needed as we use different topics usually
     }
 };
+
+namespace {
+    // Helper for Free Function Pointer test
+    int g_freeFuncVal = 0;
+    void freeFunc(int i) { g_freeFuncVal = i; }
+
+    // Helper for Functor test
+    struct MyFunctor {
+        int* target;
+        void operator()(int i) { *target = i; }
+    };
+
+    // Helper for Member Function test
+    struct MemberMethod {
+        int& out;
+        void memberFunc(int i) { out = i; }
+    };
+}
 
 TEST_F(MessageCenterTest, BasicString) {
     std::string result;
@@ -95,7 +114,40 @@ TEST_F(MessageCenterTest, UnsubscribeAll) {
     publish_message_sync("bulk", 1);
     EXPECT_EQ(count, 2);
 
-    eventsystem::unsubscribe_message("bulk");
+    MessageCenter::instance().unsubscribe("bulk");
     publish_message_sync("bulk", 1);
     EXPECT_EQ(count, 2); // Unchanged
+}
+
+TEST_F(MessageCenterTest, CallableSupport) {
+    int val_lambda = 0;
+    int val_functor = 0;
+    int val_member = 0;
+    g_freeFuncVal = 0;
+
+    // 1. Lambda
+    auto t1 = subscribe_message<int>("topic_lambda", [&](int i){ val_lambda = i; });
+    publish_message_sync("topic_lambda", 10);
+    EXPECT_EQ(val_lambda, 10);
+    unsubscribe_message("topic_lambda", t1);
+
+    // 2. Functor (Struct with operator())
+    auto t2 = subscribe_message<int>("topic_functor", MyFunctor{&val_functor});
+    publish_message_sync("topic_functor", 20);
+    EXPECT_EQ(val_functor, 20);
+    unsubscribe_message("topic_functor", t2);
+
+    // 3. Class Member Function (via std::bind)
+    MemberMethod obj{val_member};
+    // Bind creates a callable that matches void(int) signature
+    auto t3 = subscribe_message<int>("topic_member", std::bind(&MemberMethod::memberFunc, &obj, std::placeholders::_1));
+    publish_message_sync("topic_member", 30);
+    EXPECT_EQ(val_member, 30);
+    unsubscribe_message("topic_member", t3);
+
+    // 4. Free Function Pointer
+    auto t4 = subscribe_message<int>("topic_static", &freeFunc);
+    publish_message_sync("topic_static", 40);
+    EXPECT_EQ(g_freeFuncVal, 40);
+    unsubscribe_message("topic_static", t4);
 }
