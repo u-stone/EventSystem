@@ -21,21 +21,21 @@ struct LogoutEvent {
 ```
 
 ### 1.2 订阅事件
-使用 `subscribe_event<T>` 订阅特定类型的事件。
+使用 `SubscribeEvent<T>` 订阅特定类型的事件。
 
 ```cpp
 #include "EventSystem/EventCenter.h"
 
-void demo_subscribe() {
+void DemoSubscribe() {
     using namespace eventsystem;
 
     // 订阅 LoginEvent
-    auto handle = subscribe_event<LoginEvent>([](const LoginEvent& e) {
+    auto handle = SubscribeEvent<LoginEvent>([](const LoginEvent& e) {
         std::cout << "User " << e.username << " logged in at " << e.timestamp << std::endl;
     });
 
     // 订阅 LogoutEvent
-    subscribe_event<LogoutEvent>([](const LogoutEvent& e) {
+    SubscribeEvent<LogoutEvent>([](const LogoutEvent& e) {
         std::cout << "User " << e.username << " logged out." << std::endl;
     });
 }
@@ -45,17 +45,17 @@ void demo_subscribe() {
 支持同步和异步发布。
 
 ```cpp
-void demo_publish() {
+void DemoPublish() {
     using namespace eventsystem;
 
     // 1. 异步发布 (推荐): 不阻塞当前线程，放入后台队列执行
-    publish_event(LoginEvent{"Alice", 123456789});
+    PublishEvent(LoginEvent{"Alice", 123456789});
 
     // 2. 同步发布: 立即在当前线程调用所有处理函数
-    publish_event_sync(LogoutEvent{"Alice"});
+    PublishEventSync(LogoutEvent{"Alice"});
 
     // 3. 延时发布: 500ms 后执行
-    publish_event_delayed(LoginEvent{"Bob", 999}, std::chrono::milliseconds(500));
+    PublishEventDelayed(LoginEvent{"Bob", 999}, std::chrono::milliseconds(500));
 }
 ```
 
@@ -63,7 +63,7 @@ void demo_publish() {
 使用 `handle` 注销订阅。
 
 ```cpp
-unsubscribe_event(handle);
+UnsubscribeEvent(handle);
 ```
 
 ---
@@ -82,7 +82,7 @@ unsubscribe_event(handle);
 #include "EventSystem/MessageCenter.h"
 
 // 自动推导为 std::function<void(const std::string&)>
-auto token = eventsystem::subscribe_message("log", [](const std::string& msg) {
+auto token = eventsystem::SubscribeMessage("log", [](const std::string& msg) {
     std::cout << "Log: " << msg << std::endl;
 });
 ```
@@ -93,12 +93,12 @@ auto token = eventsystem::subscribe_message("log", [](const std::string& msg) {
 ```cpp
 // 订阅两个整数参数
 // 注意：必须显式指定模板参数 <int, int>
-auto token2 = eventsystem::subscribe_message<int, int>("mouse_click", [](int x, int y) {
+auto token2 = eventsystem::SubscribeMessage<int, int>("mouse_click", [](int x, int y) {
     std::cout << "Clicked at " << x << ", " << y << std::endl;
 });
 
 // 订阅无参数信号
-auto token3 = eventsystem::subscribe_message<>("app_start", []() {
+auto token3 = eventsystem::SubscribeMessage<>("app_start", []() {
     std::cout << "Application Started!" << std::endl;
 });
 ```
@@ -109,12 +109,12 @@ auto token3 = eventsystem::subscribe_message<>("app_start", []() {
 
 ```cpp
 // 1. 异步发布 (默认)
-eventsystem::publish_message("log", "System running"); // 自动转换为 std::string
-eventsystem::publish_message("mouse_click", 100, 200); // 匹配 <int, int>
-eventsystem::publish_message("app_start");             // 匹配 <>
+eventsystem::PublishMessage("log", "System running"); // 自动转换为 std::string
+eventsystem::PublishMessage("mouse_click", 100, 200); // 匹配 <int, int>
+eventsystem::PublishMessage("app_start");             // 匹配 <>
 
 // 2. 同步发布
-eventsystem::publish_message_sync("log", "Immediate log");
+eventsystem::PublishMessageSync("log", "Immediate log");
 ```
 
 ### 2.3 安全性说明
@@ -122,16 +122,19 @@ eventsystem::publish_message_sync("log", "Immediate log");
 
 ```cpp
 // 订阅者期待 int
-subscribe_message<int>("topic", [](int i){});
+SubscribeMessage<int>("topic", [](int i){});
 
 // 发布者发送 float -> 订阅者不会收到通知
-publish_message("topic", 3.14f); 
+PublishMessage("topic", 3.14f); 
 ```
 
 ### 2.4 注销
 ```cpp
 // 注销单个订阅
-eventsystem::unsubscribe_message("topic", token);
+eventsystem::UnsubscribeMessage("topic", token);
+
+// 注销该 Topic 下的所有订阅者
+eventsystem::UnsubscribeMessage("topic");
 ```
 
 ---
@@ -140,7 +143,7 @@ eventsystem::unsubscribe_message("topic", token);
 
 ### 3.1 共享注册表 (Unified Registry)
 无论是 `EventCenter` 还是 `MessageCenter`，订阅者只需注册一次。
-- `publish_event` (异步) 和 `publish_event_sync` (同步) 都会触发同一个订阅者。
+- `PublishEvent` (异步) 和 `PublishEventSync` (同步) 都会触发同一个订阅者。
 - 无需为同步和异步分别订阅。
 
 ### 3.2 线程安全
