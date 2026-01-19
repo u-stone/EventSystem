@@ -220,4 +220,15 @@ eventsystem::SubscriptionHandle RegisterStaticEventHandler()
     return eventsystem::EventRegistry::RegisterHandler<TEvent>(&TEvent::Handle);
 }
 
+inline void UnregisterStaticEventHandler(eventsystem::SubscriptionHandle handle)
+{
+    eventsystem::EventRegistry::UnregisterHandler(handle);
+}
+
+template <typename TEvent>
+inline void UnregisterStaticEventHandler()
+{
+    eventsystem::EventRegistry::UnregisterAllHandlers<TEvent>();
+}
+
 } // namespace eventsystem

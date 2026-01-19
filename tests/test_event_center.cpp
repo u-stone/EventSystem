@@ -127,10 +127,24 @@ TEST_F(EventSystemTest, StaticHandler) {
     // Test unregistering
     TestSync sync2;
     StaticEvent::sync_ptr = &sync2;
-    EventCenter::Instance().UnregisterHandler(handle);
+    UnregisterStaticEventHandler(handle);
     PublishEvent(StaticEvent{});
     EXPECT_FALSE(sync2.waitFor(std::chrono::milliseconds(100)));
     StaticEvent::sync_ptr = nullptr; // Clean up
+}
+
+TEST_F(EventSystemTest, UnregisterAllStaticHandlers) {
+    TestSync sync;
+    StaticEvent::sync_ptr = &sync;
+
+    RegisterStaticEventHandler<StaticEvent>();
+    RegisterStaticEventHandler<StaticEvent>();
+
+    UnregisterStaticEventHandler<StaticEvent>();
+
+    PublishEvent(StaticEvent{});
+    EXPECT_FALSE(sync.waitFor(std::chrono::milliseconds(100)));
+    StaticEvent::sync_ptr = nullptr;
 }
 
 TEST_F(EventSystemTest, WeakHandlerLifecycle) {
