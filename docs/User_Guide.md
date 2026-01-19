@@ -66,6 +66,32 @@ void DemoPublish() {
 UnsubscribeEvent(handle);
 ```
 
+### 1.5 静态成员函数订阅
+支持直接注册类的静态成员函数作为 Handler，这种方式性能更高（无内存分配）。
+
+```cpp
+struct MyEvent { int id; };
+
+class MyHandler {
+public:
+    static void Handle(const MyEvent& e) {
+        // ...
+    }
+};
+
+// 注册
+auto handle = RegisterStaticEventHandler<MyEvent>();
+
+// 注销方式 1: 通过 Handle
+UnregisterStaticEventHandler(handle);
+
+// 注销方式 2: 注销 MyEvent 的所有静态及普通 Handler (注意：这会清除该事件的所有订阅)
+// 通常不建议直接使用 UnregisterAllHandlers，除非你确定要重置。
+// 针对 StaticHandler 的专门注销重载:
+UnregisterStaticEventHandler<MyEvent>(); // 注销 MyEvent 类型下的所有 Handler (API 行为由具体实现决定，当前 UnregisterAllHandlers 会清除所有)
+```
+*(注：`UnregisterStaticEventHandler<TEvent>()` 实际上是调用 `UnregisterAllHandlers<TEvent>()`，请谨慎使用)*
+
 ---
 
 ## 2. MessageCenter (String-based)
