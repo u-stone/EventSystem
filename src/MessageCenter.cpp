@@ -1,12 +1,12 @@
 #include "EventSystem/MessageCenter.h"
 #include <algorithm>
+#include <unordered_map>
+#include <vector>
 #include <mutex>
 #include <atomic>
 #include <thread>
 #include <queue>
 #include <condition_variable>
-#include <unordered_map>
-#include <iostream>
 
 namespace eventsystem {
 
@@ -24,18 +24,17 @@ struct MessageCenter::Impl {
     std::mutex m_queueMutex;
     std::condition_variable m_cv;
     std::thread m_worker;
-    bool m_running;
+    bool m_running{true};
 
     Impl() {
-        m_running = true;
-        m_worker = std::thread(&Impl::workerLoop, this);
+        m_worker = std::thread(&Impl::WorkerLoop, this);
     }
 
     ~Impl() {
-        stop();
+        Stop();
     }
 
-    void stop() {
+    void Stop() {
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
             m_running = false;
@@ -46,7 +45,7 @@ struct MessageCenter::Impl {
         }
     }
 
-    void workerLoop() {
+    void WorkerLoop() {
         while (true) {
             std::function<void()> task;
             {
@@ -66,35 +65,34 @@ struct MessageCenter::Impl {
             if (task) {
                 try {
                     task();
-                } catch (const std::exception& e) {
-                    std::cerr << "[MessageCenter] Async worker exception: " << e.what() << std::endl;
-                } catch (...) {
-                    std::cerr << "[MessageCenter] Async worker unknown exception." << std::endl;
-                }
+                } catch (...) {}
             }
         }
     }
 };
 
-MessageCenter& MessageCenter::instance() {
+MessageCenter& MessageCenter::Instance() {
     static MessageCenter inst;
     return inst;
 }
 
-MessageCenter::MessageCenter() : m_impl(std::make_unique<Impl>()) {
-}
+MessageCenter::MessageCenter() : m_impl(new Impl()) {}
 
 MessageCenter::~MessageCenter() {
+    if (m_impl) {
+        delete m_impl;
+        m_impl = nullptr;
+    }
 }
 
-MessageCenter::SubscriptionToken MessageCenter::subscribeImpl(const std::string& topic, std::any callback) {
+MessageCenter::SubscriptionToken MessageCenter::SubscribeInternal(const std::string& topic, std::any callback) {
     std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
     SubscriptionToken token = m_impl->m_nextToken++;
     m_impl->m_subscriptions[topic].push_back({token, std::move(callback)});
     return token;
 }
 
-void MessageCenter::unsubscribe(const std::string& topic, SubscriptionToken token) {
+void MessageCenter::Unsubscribe(const std::string& topic, SubscriptionToken token) {
     std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
     auto it = m_impl->m_subscriptions.find(topic);
     if (it != m_impl->m_subscriptions.end()) {
@@ -106,31 +104,31 @@ void MessageCenter::unsubscribe(const std::string& topic, SubscriptionToken toke
     }
 }
 
-void MessageCenter::unsubscribe(const std::string& topic) {
+void MessageCenter::Unsubscribe(const std::string& topic) {
     std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
     m_impl->m_subscriptions.erase(topic);
 }
 
-std::vector<std::any> MessageCenter::getSubscribers(const std::string& topic) {
-    std::vector<std::any> callbacksToInvoke;
-    {
-        std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
-        auto it = m_impl->m_subscriptions.find(topic);
-        if (it != m_impl->m_subscriptions.end()) {
-            for (const auto& entry : it->second) {
-                callbacksToInvoke.push_back(entry.callback);
-            }
-        }
-    }
-    return callbacksToInvoke;
-}
-
-void MessageCenter::queueTask(std::function<void()> task) {
+void MessageCenter::EnqueueTask(std::function<void()> task) {
     {
         std::lock_guard<std::mutex> lock(m_impl->m_queueMutex);
         m_impl->m_queue.emplace(std::move(task));
     }
     m_impl->m_cv.notify_one();
+}
+
+std::vector<std::any> MessageCenter::GetCallbacksInternal(const std::string& topic) {
+    std::vector<std::any> callbacks;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
+        auto it = m_impl->m_subscriptions.find(topic);
+        if (it != m_impl->m_subscriptions.end()) {
+            for (const auto& entry : it->second) {
+                callbacks.push_back(entry.callback);
+            }
+        }
+    }
+    return callbacks;
 }
 
 } // namespace eventsystem

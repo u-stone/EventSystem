@@ -41,14 +41,14 @@ struct TestSync {
 class EventSystemTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        EventCenter::destroy();
-        SyncEventCenter::destroy();
-        EventRegistry::reset();
+        EventCenter::Destroy();
+        SyncEventCenter::Destroy();
+        EventRegistry::Reset();
     }
     void TearDown() override {
-        EventCenter::destroy();
-        SyncEventCenter::destroy();
-        EventRegistry::reset();
+        EventCenter::Destroy();
+        SyncEventCenter::Destroy();
+        EventRegistry::Reset();
     }
 };
 
@@ -62,7 +62,7 @@ class WeakHandler : public IEventHandler {
 public:
     TestSync* sync;
     WeakHandler(TestSync& s) : sync(&s) {}
-    void handle(const std::any& eventData) override {
+    void Handle(const std::any& eventData) override {
         if (std::any_cast<TestEvent1>(&eventData)) {
             if (sync) sync->notify();
         }
@@ -75,7 +75,7 @@ class StrongHandler : public IEventHandler {
 public:
     TestSync& sync;
     StrongHandler(TestSync& s) : sync(s) {}
-    void handle(const std::any& eventData) override {
+    void Handle(const std::any& eventData) override {
         if (std::any_cast<TestEvent1>(&eventData)) {
             sync.notify();
         }
@@ -85,7 +85,7 @@ public:
 // An event with a static handler
 struct StaticEvent {
     static TestSync* sync_ptr; // Static pointer to sync object
-    static void handle(const StaticEvent&) {
+    static void Handle(const StaticEvent&) {
         if (sync_ptr) sync_ptr->notify();
     }
 };
@@ -96,23 +96,23 @@ TestSync* StaticEvent::sync_ptr = nullptr;
 
 TEST_F(EventSystemTest, Singleton) {
     // Ensures that instance() always returns the same object.
-    EXPECT_EQ(&EventCenter::instance(), &EventCenter::instance());
+    EXPECT_EQ(&EventCenter::Instance(), &EventCenter::Instance());
 }
 
 TEST_F(EventSystemTest, CallbackHandler) {
     TestSync sync;
-    auto handle = EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1& event) {
+    auto handle = EventCenter::Instance().RegisterHandler<TestEvent1>([&](const TestEvent1& event) {
         EXPECT_EQ(event.value, 42);
         sync.notify();
     });
 
-    publish_event(TestEvent1{42});
+    PublishEvent(TestEvent1{42});
     EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
 
     // Test unregistering
     TestSync sync2;
-    EventCenter::instance().unregisterHandler(handle);
-    publish_event(TestEvent1{99});
+    EventCenter::Instance().UnregisterHandler(handle);
+    PublishEvent(TestEvent1{99});
     EXPECT_FALSE(sync2.waitFor(std::chrono::milliseconds(100)));
 }
 
@@ -120,15 +120,15 @@ TEST_F(EventSystemTest, StaticHandler) {
     TestSync sync;
     StaticEvent::sync_ptr = &sync; // Point static member to our sync object
 
-    auto handle = registerStaticEventHandler<StaticEvent>();
-    publish_event(StaticEvent{});
+    auto handle = RegisterStaticEventHandler<StaticEvent>();
+    PublishEvent(StaticEvent{});
     EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
     
     // Test unregistering
     TestSync sync2;
     StaticEvent::sync_ptr = &sync2;
-    EventCenter::instance().unregisterHandler(handle);
-    publish_event(StaticEvent{});
+    EventCenter::Instance().UnregisterHandler(handle);
+    PublishEvent(StaticEvent{});
     EXPECT_FALSE(sync2.waitFor(std::chrono::milliseconds(100)));
     StaticEvent::sync_ptr = nullptr; // Clean up
 }
@@ -138,10 +138,10 @@ TEST_F(EventSystemTest, WeakHandlerLifecycle) {
     
     // 1. Create and register handler
     auto handler = std::make_shared<WeakHandler>(sync_recv);
-    EventCenter::instance().registerWeakHandler<TestEvent1>(handler);
+    EventCenter::Instance().RegisterWeakHandler<TestEvent1>(handler);
 
     // 2. Publish and expect it to be received
-    publish_event(TestEvent1{1});
+    PublishEvent(TestEvent1{1});
     EXPECT_TRUE(sync_recv.waitFor(std::chrono::milliseconds(200)));
 
     // 3. Reset the shared_ptr, destroying the handler object
@@ -153,7 +153,7 @@ TEST_F(EventSystemTest, WeakHandlerLifecycle) {
     // 4. Publish again and expect it NOT to be received
     TestSync sync_recv2;
     // We can't reuse the handler, so we just check if sync_recv2 is notified
-    publish_event(TestEvent1{2});
+    PublishEvent(TestEvent1{2});
     EXPECT_FALSE(sync_recv2.waitFor(std::chrono::milliseconds(100)));
 }
 
@@ -162,11 +162,11 @@ TEST_F(EventSystemTest, StrongHandlerFireAndForget) {
 
     // Register a handler without keeping a shared_ptr to it.
     // EventCenter should keep it alive.
-    EventCenter::instance().registerHandler<TestEvent1>(
+    EventCenter::Instance().RegisterHandler<TestEvent1>(
         std::make_shared<StrongHandler>(sync)
     );
 
-    publish_event(TestEvent1{1});
+    PublishEvent(TestEvent1{1});
     EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
 }
 
@@ -175,15 +175,15 @@ TEST_F(EventSystemTest, UnregisterAll) {
     StaticEvent::sync_ptr = &sync3;
 
     // 1. Register handlers that we expect to be removed
-    EventCenter::instance().registerHandler<StaticEvent>(std::make_shared<StrongHandler>(sync1));
-    EventCenter::instance().registerHandler<StaticEvent>([&](const StaticEvent&){ sync2.notify(); });
-    registerStaticEventHandler<StaticEvent>();
+    EventCenter::Instance().RegisterHandler<StaticEvent>(std::make_shared<StrongHandler>(sync1));
+    EventCenter::Instance().RegisterHandler<StaticEvent>([&](const StaticEvent&){ sync2.notify(); });
+    RegisterStaticEventHandler<StaticEvent>();
 
     // 2. Unregister all immediately
-    EventCenter::instance().unregisterAllHandlers<StaticEvent>();
+    EventCenter::Instance().UnregisterAllHandlers<StaticEvent>();
 
     // 3. Publish event
-    publish_event(StaticEvent{});
+    PublishEvent(StaticEvent{});
     waitForAsync();
 
     // 4. Ensure none were notified
@@ -203,13 +203,13 @@ TEST_F(EventSystemTest, DelayedEventIsProcessedAfterDelay) {
     
     std::atomic<std::chrono::steady_clock::time_point> handled_at;
 
-    EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1& event) {
+    EventCenter::Instance().RegisterHandler<TestEvent1>([&](const TestEvent1& event) {
         handled_at = std::chrono::steady_clock::now();
         sync.notify();
     });
 
     auto start_time = std::chrono::steady_clock::now();
-    publish_event_delayed(TestEvent1{100}, delay);
+    PublishEventDelayed(TestEvent1{100}, delay);
 
     // Wait for the event to be handled
     EXPECT_TRUE(sync.waitFor(delay + std::chrono::milliseconds(100)));
@@ -236,14 +236,14 @@ TEST_F(EventSystemTest, EventsAreProcessedInTemporalOrder) {
         else if (event.value == 3) sync3.notify();
     };
 
-    auto handle = EventCenter::instance().registerHandler<TestEvent1>(handler);
+    auto handle = EventCenter::Instance().RegisterHandler<TestEvent1>(handler);
 
     auto now = std::chrono::steady_clock::now();
 
     // Publish events out of order with different delays
-    publish_event_at(TestEvent1{3}, now + std::chrono::milliseconds(300)); // Last
-    publish_event_at(TestEvent1{1}, now + std::chrono::milliseconds(100)); // First
-    publish_event_at(TestEvent1{2}, now + std::chrono::milliseconds(200)); // Second
+    PublishEventAt(TestEvent1{3}, now + std::chrono::milliseconds(300)); // Last
+    PublishEventAt(TestEvent1{1}, now + std::chrono::milliseconds(100)); // First
+    PublishEventAt(TestEvent1{2}, now + std::chrono::milliseconds(200)); // Second
 
     // Wait for all events to be processed
     EXPECT_TRUE(sync1.waitFor(std::chrono::milliseconds(200)));
@@ -262,12 +262,12 @@ TEST_F(EventSystemTest, ScheduledEventIsProcessedAtTime) {
     const auto scheduled_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
     std::atomic<std::chrono::steady_clock::time_point> handled_at;
 
-    EventCenter::instance().registerHandler<TestEvent2>([&](const TestEvent2& event) {
+    EventCenter::Instance().RegisterHandler<TestEvent2>([&](const TestEvent2& event) {
         handled_at = std::chrono::steady_clock::now();
         sync.notify();
     });
 
-    publish_event_at(TestEvent2{"scheduled"}, scheduled_time);
+    PublishEventAt(TestEvent2{"scheduled"}, scheduled_time);
 
     EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(350)));
 
@@ -283,16 +283,16 @@ TEST_F(EventSystemTest, CancelAllEvents) {
     TestSync sync;
     std::atomic<bool> received{false};
 
-    auto handle = EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1&) {
+    auto handle = EventCenter::Instance().RegisterHandler<TestEvent1>([&](const TestEvent1&) {
         received = true;
         sync.notify();
     });
 
     // 1. Publish a delayed event
-    publish_event_delayed(TestEvent1{999}, std::chrono::milliseconds(200));
+    PublishEventDelayed(TestEvent1{999}, std::chrono::milliseconds(200));
 
     // 2. Cancel all events immediately
-    cancelAllEvents();
+    CancelAllEvents();
 
     // 3. Wait longer than the delay to ensure it didn't fire
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -300,7 +300,7 @@ TEST_F(EventSystemTest, CancelAllEvents) {
     EXPECT_FALSE(sync.notified);
 
     // 4. Verify the system is still operational
-    publish_event(TestEvent1{123});
+    PublishEvent(TestEvent1{123});
     EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
     EXPECT_TRUE(received);
 }
@@ -309,17 +309,17 @@ TEST_F(EventSystemTest, ExceptionIsolation) {
     TestSync sync;
     
     // 1. Register a handler that throws an exception
-    EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1&) {
+    EventCenter::Instance().RegisterHandler<TestEvent1>([&](const TestEvent1&) {
         throw std::runtime_error("Intentional crash for testing");
     });
 
     // 2. Register a second handler that should still run
-    EventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1&) {
+    EventCenter::Instance().RegisterHandler<TestEvent1>([&](const TestEvent1&) {
         sync.notify();
     });
 
     // 3. Publish event. The first handler will crash, but the second should succeed.
-    publish_event(TestEvent1{1});
+    PublishEvent(TestEvent1{1});
     EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
 }
 
@@ -329,61 +329,61 @@ TEST_F(EventSystemTest, SynchronousMode) {
     auto main_thread_id = std::this_thread::get_id();
 
     // Register with SyncEventCenter
-    auto handle = SyncEventCenter::instance().registerHandler<TestEvent1>([&](const TestEvent1& e) {
+    auto handle = SyncEventCenter::Instance().RegisterHandler<TestEvent1>([&](const TestEvent1& e) {
         handled = true;
         handler_thread_id = std::this_thread::get_id();
     });
 
     // 2. Publish event synchronously
-    publish_event_sync(TestEvent1{1});
+    PublishEventSync(TestEvent1{1});
 
     // 3. Verify immediate execution on the same thread
     EXPECT_TRUE(handled);
     EXPECT_EQ(handler_thread_id, main_thread_id);
     
-    SyncEventCenter::instance().unregisterHandler(handle);
+    SyncEventCenter::Instance().UnregisterHandler(handle);
 }
 
 TEST_F(EventSystemTest, SingletonDestruction) {
-    EventCenter& instance1 = EventCenter::instance();
+    EventCenter& instance1 = EventCenter::Instance();
 
     // Register a handler on instance 1 to verify state loss
     bool handled = false;
     // We don't need to keep the handle because we are destroying the whole system
-    instance1.registerHandler<TestEvent1>([&](const TestEvent1&){
+    instance1.RegisterHandler<TestEvent1>([&](const TestEvent1&){
         handled = true;
     });
 
     // Destroy the singleton
-    EventCenter::destroy();
-    EventRegistry::reset(); // Clear static handlers to simulate full system reset
+    EventCenter::Destroy();
+    EventRegistry::Reset(); // Clear static handlers to simulate full system reset
 
     // Get a new instance
 
     // Verify state is reset (handler from instance1 should not exist in instance2)
-    publish_event(TestEvent1{1});
+    PublishEvent(TestEvent1{1});
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     EXPECT_FALSE(handled);
 }
 
 TEST_F(EventSystemTest, DestructorCancelsPendingEvents) {
     // Setup: Get a fresh instance (handled by SetUp, but we get reference here)
-    EventCenter& center = EventCenter::instance();
+    EventCenter& center = EventCenter::Instance();
 
     // Register a handler just to be sure
     bool executed = false;
-    center.registerHandler<TestEvent1>([&](const TestEvent1&) {
+    center.RegisterHandler<TestEvent1>([&](const TestEvent1&) {
         executed = true;
     });
 
     // Action: Schedule an event far in the future (e.g., 2 seconds)
     // If the destructor doesn't cancel events, it might hang waiting for this,
     // or the worker thread might busy-loop until this time is reached.
-    center.publish_event_delayed(TestEvent1{100}, std::chrono::seconds(2));
+    center.PublishEventDelayed(TestEvent1{100}, std::chrono::seconds(2));
 
     // Measure destruction time
     auto start = std::chrono::steady_clock::now();
-    EventCenter::destroy(); // Triggers ~EventCenter()
+    EventCenter::Destroy(); // Triggers ~EventCenter()
     auto end = std::chrono::steady_clock::now();
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -407,7 +407,7 @@ TEST_F(EventSystemTest, ConcurrentRegistration) {
     for (int i = 0; i < num_publisher_threads; ++i) {
         publishers.emplace_back([&]() {
             while (running) {
-                publish_event(TestEvent1{1});
+                PublishEvent(TestEvent1{1});
                 std::this_thread::yield();
             }
         });
@@ -418,12 +418,12 @@ TEST_F(EventSystemTest, ConcurrentRegistration) {
     for (int i = 0; i < num_registry_threads; ++i) {
         registrars.emplace_back([&]() {
             while (running) {
-                auto h = EventRegistry::registerHandler<TestEvent1>([&](const TestEvent1&) {
+                auto h = EventRegistry::RegisterHandler<TestEvent1>([&](const TestEvent1&) {
                     received_count.fetch_add(1, std::memory_order_relaxed);
                 });
                 // Small sleep to allow some events to be processed
                 std::this_thread::sleep_for(std::chrono::microseconds(10));
-                EventRegistry::unregisterHandler(h);
+                EventRegistry::UnregisterHandler(h);
             }
         });
     }
@@ -437,12 +437,12 @@ TEST_F(EventSystemTest, ConcurrentRegistration) {
 
     // Verify system is still responsive
     TestSync sync;
-    auto h = EventRegistry::registerHandler<TestEvent1>([&](const TestEvent1&) {
+    auto h = EventRegistry::RegisterHandler<TestEvent1>([&](const TestEvent1&) {
         sync.notify();
     });
-    publish_event(TestEvent1{1});
+    PublishEvent(TestEvent1{1});
     EXPECT_TRUE(sync.waitFor(std::chrono::milliseconds(200)));
-    EventRegistry::unregisterHandler(h);
+    EventRegistry::UnregisterHandler(h);
 }
 
 TEST_F(EventSystemTest, MixedWorkload) {
@@ -450,7 +450,7 @@ TEST_F(EventSystemTest, MixedWorkload) {
     std::atomic<int> total_processed{0};
     std::atomic<bool> running{true};
     
-    auto main_handler = EventRegistry::registerHandler<TestEvent1>([&](const TestEvent1& e) {
+    auto main_handler = EventRegistry::RegisterHandler<TestEvent1>([&](const TestEvent1& e) {
         total_processed.fetch_add(1, std::memory_order_relaxed);
     });
 
@@ -459,14 +459,14 @@ TEST_F(EventSystemTest, MixedWorkload) {
         workers.emplace_back([&, i]() {
             while (running) {
                 if (i % 2 == 0) {
-                    publish_event(TestEvent1{i});
+                    PublishEvent(TestEvent1{i});
                 } else {
-                    publish_event_delayed(TestEvent1{i}, std::chrono::milliseconds(1 + (i*10)));
+                    PublishEventDelayed(TestEvent1{i}, std::chrono::milliseconds(1 + (i*10)));
                 }
                 
                 // Occasional sync publish
                 if (i == 0) {
-                    publish_event_sync(TestEvent1{i});
+                    PublishEventSync(TestEvent1{i});
                 }
                 
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -482,5 +482,5 @@ TEST_F(EventSystemTest, MixedWorkload) {
     EXPECT_GT(total_processed.load(), 0);
     
     // Cleanup
-    EventRegistry::unregisterHandler(main_handler);
+    EventRegistry::UnregisterHandler(main_handler);
 }
