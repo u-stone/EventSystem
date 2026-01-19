@@ -82,6 +82,7 @@ public:
 ### 3.3 Static Handlers (静态函数)
 对于无状态的逻辑，支持直接注册类的静态成员函数。
 - **优化**: 内部不需要分配复杂的对象，直接存储函数指针。
+- **注销**: 支持 `UnregisterStaticEventHandler(handle)` 或 `UnregisterStaticEventHandler<TEvent>()`。
 
 ## 4. 异步分发模型
 
