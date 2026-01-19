@@ -32,27 +32,26 @@ struct MessageCenter::Impl {
 
 ```cpp
 template <typename... Args>
-SubscriptionToken subscribe(const std::string& topic, std::function<void(Args...)> callback) {
+SubscriptionToken Subscribe(const std::string& topic, std::function<void(Args...)> callback) {
     // ...
     // 将具体类型的 std::function 存入 std::any
-    m_subscriptions[topic].push_back({token, std::any(callback)});
-    return token;
+    // PIMPL: SubscribeInternal(topic, std::any(callback))
 }
 ```
 **关键点：**
 *   **显式模板参数**: 对于 Lambda 表达式，编译器无法直接推导 `std::function` 的模板参数。因此，用户通常需要显式指定类型：
     ```cpp
     // 正确：显式指定参数类型
-    subscribe<int, int>("coords", [](int x, int y){ ... });
+    Subscribe<int, int>("coords", [](int x, int y){ ... });
     ```
     或者是构造好 `std::function` 后传入。
 
 ### 2.3 分发机制：类型恢复与安全调用
-在 `publish` 时，调用者提供了具体的参数。编译器推导出参数类型 `Args...`，我们利用这些类型尝试将 `std::any` 还原回原始的函数指针。
+在 `Publish` 时，调用者提供了具体的参数。编译器推导出参数类型 `Args...`，我们利用这些类型尝试将 `std::any` 还原回原始的函数指针。
 
 ```cpp
 template <typename... Args>
-void dispatch(const std::string& topic, Args... args) {
+void Dispatch(const std::string& topic, Args... args) {
     // ... 获取 callbacks ...
     for (const auto& anyCb : callbacksToInvoke) {
         // 尝试转换回精确的函数签名
@@ -72,20 +71,20 @@ void dispatch(const std::string& topic, Args... args) {
 
 ```cpp
 template <typename... Args>
-void publishAsync(const std::string& topic, Args&&... args) {
+void PublishAsync(const std::string& topic, Args&&... args) {
     // 1. 使用 std::decay 去除引用和 const，确保按值捕获（Copy/Move）
     // 2. 使用 std::make_tuple 将所有参数打包
     auto task = [this, topic, args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
-        // 3. 在 Worker 线程中解包 (std::apply) 并调用 dispatch
+        // 3. 在 Worker 线程中解包 (std::apply) 并调用 Dispatch
         std::apply([this, &topic](auto&&... unpackedArgs) {
-            this->dispatch<typename std::decay<Args>::type...>(
+            this->Dispatch<typename std::decay<Args>::type...>(
                 topic, std::forward<decltype(unpackedArgs)>(unpackedArgs)...
             );
         }, std::move(args));
     };
     
     // 将闭包任务推入队列
-    m_queue.emplace(std::move(task));
+    EnqueueTask(std::move(task));
 }
 ```
 **关键点：**
@@ -97,24 +96,18 @@ void publishAsync(const std::string& topic, Args&&... args) {
 
 ## 3. Lambda 推导问题与解决方案
 C++17 中，无法直接从 Lambda 表达式推导 `std::function<void(Args...)>` 中的 `Args...`。
-因此，我们的 `subscribe_message` 辅助函数采用了以下策略：
+因此，我们引入了 `SubscribeMessage` 辅助函数和 `function_traits`：
 
 1.  **Helper Template**:
     ```cpp
     template <typename... Args, typename Callback>
-    SubscriptionToken subscribe_message(const std::string& topic, Callback&& callback) {
-        // 强制构造 std::function，依赖用户提供的显式模板参数 <Args...>
-        return instance().subscribe<Args...>(topic, std::function<void(Args...)>(std::forward<Callback>(callback)));
+    SubscriptionToken SubscribeMessage(const std::string& topic, Callback&& callback) {
+        // 如果 Args... 为空，则利用 Traits 推导 Lambda 参数类型
+        // 如果 Args... 不为空，则强制构造 std::function<void(Args...)>
+        // 最终调用 Instance().Subscribe<Args...>(...)
     }
     ```
-    使用示例：`subscribe_message<int>("topic", [](int i){})`。
-
-2.  **Legacy Overload**:
-    为了兼容旧代码和简化最常见的 `std::string` 场景，保留了特化版本：
-    ```cpp
-    inline SubscriptionToken subscribe_message(const std::string& topic, std::function<void(const std::string&)> callback);
-    ```
-    这允许直接使用 `subscribe_message("topic", [](const std::string& s){})` 而无需显式指定模板参数，前提是 Lambda 可隐式转换为该特定函数类型。
+    使用示例：`SubscribeMessage("topic", [](int i){})` (自动推导为 `<int>`)。
 
 ## 4. 总结
 该设计在保持接口简洁的同时，极大地扩展了灵活性：

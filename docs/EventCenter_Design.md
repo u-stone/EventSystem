@@ -27,7 +27,7 @@ class IEventHandler {
 public:
     virtual ~IEventHandler() = default;
     // 参数是 std::any，包含了具体的 Event 对象
-    virtual void handle(const std::any& event) = 0;
+    virtual void Handle(const std::any& event) = 0;
 };
 ```
 
@@ -48,14 +48,14 @@ namespace {
 ```
 
 ### 2.3 泛型适配器 (Handler Wrappers)
-当用户订阅 `subscribe_event<T>(lambda)` 时，我们会在内部创建一个泛型适配器，将 `std::any` 转换回 `T`：
+当用户订阅 `SubscribeEvent<T>(lambda)` 时，我们会在内部创建一个泛型适配器，将 `std::any` 转换回 `T`：
 
 ```cpp
 // 伪代码
 class LambdaEventHandler : public IEventHandler {
     Func m_func;
 public:
-    void handle(const std::any& anyEvent) override {
+    void Handle(const std::any& anyEvent) override {
         // 安全转换：因为我们在 map 中是按 type_index 存储的，
         // 所以这里取出来的一定是 T 类型。
         const T& event = std::any_cast<const T&>(anyEvent);
@@ -69,12 +69,12 @@ public:
 `EventCenter` 提供了极其灵活的生命周期管理策略，这是其设计的另一大亮点。
 
 ### 3.1 Strong Reference (强引用)
-默认情况下（`subscribe_event` 或 `registerHandler`），`EventCenter` 会持有 Handler 的 `std::shared_ptr`。
+默认情况下（`SubscribeEvent` 或 `RegisterHandler`），`EventCenter` 会持有 Handler 的 `std::shared_ptr`。
 - **效果**: 只要 `EventCenter` 存在（或者直到显式注销），Handler 就一直存活。
 - **场景**: 简单的 Lambda 回调，或者“即发即忘”的一次性任务。
 
 ### 3.2 Weak Reference (弱引用)
-通过 `registerWeakHandler`，`EventCenter` 仅持有 `std::weak_ptr`。
+通过 `RegisterWeakHandler`，`EventCenter` 仅持有 `std::weak_ptr`。
 - **效果**: `EventCenter` **不** 拥有 Handler 的生命周期。如果外部对象（如某个 UI 窗口）被销毁了，`weak_ptr` 会自动失效。
 - **分发时检查**: 在分发事件时，系统会尝试 `lock()`。如果失效，则自动跳过（甚至可以清理）。
 - **场景**: 避免“悬垂指针”和“忘记注销”导致的崩溃。特别适合组件生命周期短于 App 生命周期的场景。
@@ -87,14 +87,14 @@ public:
 
 `AsyncEventCenter` 维护了一个后台工作线程。
 
-1.  **Publish**: 用户调用 `publish_event(E)`.
+1.  **Publish**: 用户调用 `PublishEvent(E)`.
 2.  **Enqueue**: 事件 `E` 被移动/拷贝到 `std::any`，并封装为一个 `ScheduledEvent` 任务，推入优先级队列 (`priority_queue`)。
-    - *优先级队列* 用于支持延时事件 (`publish_event_delayed`)。
+    - *优先级队列* 用于支持延时事件 (`PublishEventDelayed`)。
 3.  **Worker Thread**:
     - 等待条件变量。
     - 取出队首事件。
     - 检查是否到期 (对于延时事件)。
-    - 调用 `EventRegistry::dispatch(type_index, event_data)`。
+    - 调用 `EventRegistry::DispatchEvent(type_index, event_data)`。
 
 ## 5. 总结
 
@@ -102,3 +102,9 @@ public:
 - 利用 `std::type_index` 做路由，保证了 C++ 原生的类型匹配。
 - 利用 `std::any` 和 `IEventHandler` 做存储，实现了异构容器。
 - 利用 `weak_ptr` 解决了观察者模式中经典的生命周期管理难题。
+
+## 6. 二进制兼容性 (ABI Stability)
+
+为了确保跨 DLL 边界的安全性并消除 C4251 警告，本项目采用了 **PIMPL (Pointer to Implementation)** 惯用语。
+- 所有私有成员（特别是 STL 容器如 `std::map`, `std::vector`, `std::mutex`）都被移动到了 `.cpp` 文件中的隐藏结构体或静态变量中。
+- 头文件仅暴露纯 C++ 接口和前向声明，极大减少了编译依赖，并保证了 ABI 的稳定性。

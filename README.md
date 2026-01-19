@@ -33,7 +33,6 @@ FetchContent_Declare(
   EventSystem
   GIT_REPOSITORY https://github.com/YourUsername/EventSystem.git
   GIT_TAG        main
-  DOWNLOAD_EXTRACT_TIMESTAMP true
 )
 
 FetchContent_MakeAvailable(EventSystem)
