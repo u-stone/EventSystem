@@ -118,6 +118,32 @@ void EventRegistry::Reset()
     g_nextSubscriptionId = 1;
 }
 
+void EventRegistry::PrintSubscriptions()
+{
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    std::cout << "--- EventCenter Subscriptions ---" << std::endl;
+    
+    if (g_interfaceHandlers.empty() && g_callbackHandlers.empty()) {
+        std::cout << "  (No subscriptions)" << std::endl;
+    } else {
+        // Collect all types from both maps
+        std::map<std::type_index, std::pair<size_t, size_t>> counts;
+        for (const auto& [type, group] : g_interfaceHandlers) {
+            counts[type].first = group.strongRefs.size() + group.weakRefs.size();
+        }
+        for (const auto& [type, cbMap] : g_callbackHandlers) {
+            counts[type].second = cbMap.size();
+        }
+
+        for (const auto& [type, pair] : counts) {
+            std::cout << "  Type: " << type.name() 
+                      << " | Interface Handlers: " << pair.first
+                      << " | Callback Handlers: " << pair.second << std::endl;
+        }
+    }
+    std::cout << "---------------------------------" << std::endl;
+}
+
 void EventRegistry::DispatchEvent(const std::any &eventData, const std::type_index &eventType)
 {
     std::vector<std::shared_ptr<IEventHandler>> strongHandlers;

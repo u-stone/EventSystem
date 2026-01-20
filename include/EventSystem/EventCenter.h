@@ -68,6 +68,8 @@ public:
         UnregisterAllHandlers(std::type_index(typeid(TEvent)));
     }
 
+    static void PrintSubscriptions();
+
     static void Reset();
 
 protected:
