@@ -32,6 +32,8 @@ public:
     void Unsubscribe(const std::string& topic, SubscriptionToken token);
     void Unsubscribe(const std::string& topic);
 
+    void PrintSubscriptions();
+
     template <typename... Args>
     void PublishSync(const std::string& topic, Args&&... args) {
         Dispatch<typename std::decay<Args>::type...>(topic, std::forward<Args>(args)...);

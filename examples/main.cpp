@@ -53,8 +53,21 @@ int main() {
     std::cout << "  - Publishing int to 'number'..." << std::endl;
     PublishMessage("number", 42);
 
+    // 5. EventCenter Demo
+    struct SampleEvent { int id; };
+    auto eventHandle = SubscribeEvent<SampleEvent>([](const SampleEvent& e) {
+        std::cout << "    -> Event Received: " << e.id << std::endl;
+    });
+    PublishEvent(SampleEvent{101});
+
+    // 6. Debug Info
+    std::cout << "\n[6] Debug Info" << std::endl;
+    MessageCenter::Instance().PrintSubscriptions();
+    EventCenter::PrintSubscriptions();
+
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     UnsubscribeMessage("number", token4);
+    UnsubscribeEvent(eventHandle);
 
     std::cout << "\n--- Demo Finished ---" << std::endl;
     return 0;

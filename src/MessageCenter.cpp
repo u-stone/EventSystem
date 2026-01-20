@@ -45,6 +45,19 @@ struct MessageCenter::Impl {
         }
     }
 
+    void PrintSubscriptions() {
+        std::lock_guard<std::mutex> lock(m_registryMutex);
+        std::cout << "--- MessageCenter Subscriptions ---" << std::endl;
+        if (m_subscriptions.empty()) {
+            std::cout << "  (No subscriptions)" << std::endl;
+        } else {
+            for (const auto& kv : m_subscriptions) {
+                std::cout << "  Topic: " << kv.first << " | Subscribers: " << kv.second.size() << std::endl;
+            }
+        }
+        std::cout << "-----------------------------------" << std::endl;
+    }
+
     void WorkerLoop() {
         while (true) {
             std::function<void()> task;
@@ -107,6 +120,12 @@ void MessageCenter::Unsubscribe(const std::string& topic, SubscriptionToken toke
 void MessageCenter::Unsubscribe(const std::string& topic) {
     std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
     m_impl->m_subscriptions.erase(topic);
+}
+
+void MessageCenter::PrintSubscriptions() {
+    if (m_impl) {
+        m_impl->PrintSubscriptions();
+    }
 }
 
 void MessageCenter::EnqueueTask(std::function<void()> task) {
