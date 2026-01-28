@@ -24,6 +24,17 @@ public:
 
     ~MessageCenter();
 
+    /**
+     * @brief Set the default publish mode (Async or Sync).
+     * Default is Async.
+     */
+    void SetPublishMode(PublishMode mode);
+
+    /**
+     * @brief Get the current publish mode.
+     */
+    PublishMode GetPublishMode() const;
+
     template <typename... Args>
     SubscriptionToken Subscribe(const std::string& topic, std::function<void(Args...)> callback) {
         return SubscribeInternal(topic, std::any(callback));
@@ -51,7 +62,11 @@ public:
 
     template <typename... Args>
     void Publish(const std::string& topic, Args&&... args) {
-        PublishAsync(topic, std::forward<Args>(args)...);
+        if (GetPublishMode() == PublishMode::Sync) {
+            PublishSync(topic, std::forward<Args>(args)...);
+        } else {
+            PublishAsync(topic, std::forward<Args>(args)...);
+        }
     }
 
 private:
@@ -113,7 +128,7 @@ MessageCenter::SubscriptionToken SubscribeMessage(const std::string& topic, Call
 
 template <typename... Args>
 void PublishMessage(const std::string& topic, Args&&... args) {
-    MessageCenter::Instance().PublishAsync(topic, std::forward<Args>(args)...);
+    MessageCenter::Instance().Publish(topic, std::forward<Args>(args)...);
 }
 
 template <typename... Args>

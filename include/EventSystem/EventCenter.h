@@ -68,7 +68,20 @@ public:
         UnregisterAllHandlers(std::type_index(typeid(TEvent)));
     }
 
+    /**
+     * @brief Prints current event subscription details to stdout.
+     */
     static void PrintSubscriptions();
+
+    /**
+     * @brief Set the default publish mode (Async or Sync).
+     */
+    static void SetPublishMode(PublishMode mode);
+
+    /**
+     * @brief Get the current publish mode.
+     */
+    static PublishMode GetPublishMode();
 
     static void Reset();
 
@@ -185,7 +198,11 @@ void PublishEventAtAsync(const TEvent &event, const std::chrono::steady_clock::t
 template <typename TEvent>
 void PublishEvent(const TEvent &event)
 {
-    PublishEventAsync(event);
+    if (eventsystem::EventRegistry::GetPublishMode() == PublishMode::Sync) {
+        PublishEventSync(event);
+    } else {
+        PublishEventAsync(event);
+    }
 }
 
 template <typename TEvent>

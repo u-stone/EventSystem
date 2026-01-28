@@ -54,14 +54,67 @@ int main() {
     PublishMessage("number", 42);
 
     // 5. EventCenter Demo
+    std::cout << "\n[5] EventCenter Demo" << std::endl;
     struct SampleEvent { int id; };
     auto eventHandle = SubscribeEvent<SampleEvent>([](const SampleEvent& e) {
         std::cout << "    -> Event Received: " << e.id << std::endl;
     });
     PublishEvent(SampleEvent{101});
 
-    // 6. Debug Info
-    std::cout << "\n[6] Debug Info" << std::endl;
+    // 6. Dynamic Mode Switching (MessageCenter)
+    std::cout << "\n[6] MessageCenter Dynamic Mode" << std::endl;
+    auto mainThreadId = std::this_thread::get_id();
+    auto token5 = SubscribeMessage<>("mode_test", [mainThreadId]() {
+        auto currentId = std::this_thread::get_id();
+        if (currentId == mainThreadId) {
+            std::cout << "    -> Mode: SYNC (Main Thread)" << std::endl;
+        } else {
+            std::cout << "    -> Mode: ASYNC (Worker Thread)" << std::endl;
+        }
+    });
+
+    std::cout << "  - Default (Async):" << std::endl;
+    PublishMessage("mode_test");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::cout << "  - Switching to Sync:" << std::endl;
+    MessageCenter::Instance().SetPublishMode(PublishMode::Sync);
+    PublishMessage("mode_test");
+
+    std::cout << "  - Switching back to Async:" << std::endl;
+    MessageCenter::Instance().SetPublishMode(PublishMode::Async);
+    PublishMessage("mode_test");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    UnsubscribeMessage("mode_test", token5);
+
+    // 7. EventCenter Dynamic Mode
+    std::cout << "\n[7] EventCenter Dynamic Mode" << std::endl;
+    struct DynamicEvent { int id; };
+    auto dynamicHandle = SubscribeEvent<DynamicEvent>([mainThreadId](const DynamicEvent& e) {
+        auto currentId = std::this_thread::get_id();
+        std::cout << "    -> Event " << e.id << " on " 
+                  << (currentId == mainThreadId ? "Main Thread (SYNC)" : "Worker Thread (ASYNC)") 
+                  << std::endl;
+    });
+
+    std::cout << "  - Default (Async):" << std::endl;
+    PublishEvent(DynamicEvent{1});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    std::cout << "  - Switch to Sync:" << std::endl;
+    EventRegistry::SetPublishMode(PublishMode::Sync);
+    PublishEvent(DynamicEvent{2});
+
+    std::cout << "  - Switch back to Async:" << std::endl;
+    EventRegistry::SetPublishMode(PublishMode::Async);
+    PublishEvent(DynamicEvent{3});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    UnsubscribeEvent(dynamicHandle);
+
+    // 8. Debug Info
+    std::cout << "\n[8] Debug Info" << std::endl;
     MessageCenter::Instance().PrintSubscriptions();
     EventCenter::PrintSubscriptions();
 

@@ -30,6 +30,7 @@ namespace {
     std::map<SubscriptionHandle, std::type_index> g_handleToEventTypeMap;
     std::atomic<SubscriptionHandle> g_nextSubscriptionId{1};
     std::mutex g_registryMutex;
+    std::atomic<PublishMode> g_publishMode{PublishMode::Async};
 }
 
 void EventRegistry::RegisterInterfaceHandler(const std::type_index& type, const std::shared_ptr<IEventHandler>& handler, bool isWeak)
@@ -109,6 +110,14 @@ void EventRegistry::UnregisterAllHandlers(const std::type_index& type)
     g_interfaceHandlers.erase(type);
 }
 
+void EventRegistry::SetPublishMode(PublishMode mode) {
+    g_publishMode.store(mode);
+}
+
+PublishMode EventRegistry::GetPublishMode() {
+    return g_publishMode.load();
+}
+
 void EventRegistry::Reset()
 {
     std::lock_guard<std::mutex> lock(g_registryMutex);
@@ -116,6 +125,7 @@ void EventRegistry::Reset()
     g_callbackHandlers.clear();
     g_handleToEventTypeMap.clear();
     g_nextSubscriptionId = 1;
+    g_publishMode = PublishMode::Async;
 }
 
 void EventRegistry::PrintSubscriptions()
