@@ -25,6 +25,7 @@ struct MessageCenter::Impl {
     std::condition_variable m_cv;
     std::thread m_worker;
     bool m_running{true};
+    std::atomic<PublishMode> m_publishMode{PublishMode::Async};
 
     Impl() {
         m_worker = std::thread(&Impl::WorkerLoop, this);
@@ -96,6 +97,19 @@ MessageCenter::~MessageCenter() {
         delete m_impl;
         m_impl = nullptr;
     }
+}
+
+void MessageCenter::SetPublishMode(PublishMode mode) {
+    if (m_impl) {
+        m_impl->m_publishMode.store(mode);
+    }
+}
+
+PublishMode MessageCenter::GetPublishMode() const {
+    if (m_impl) {
+        return m_impl->m_publishMode.load();
+    }
+    return PublishMode::Async;
 }
 
 MessageCenter::SubscriptionToken MessageCenter::SubscribeInternal(const std::string& topic, std::any callback) {

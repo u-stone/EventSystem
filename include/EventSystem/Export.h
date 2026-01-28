@@ -15,3 +15,15 @@
 #else
     #define EVENTSYSTEM_API
 #endif
+
+namespace eventsystem {
+
+/**
+ * @brief Common publishing modes for both EventCenter and MessageCenter.
+ */
+enum class PublishMode {
+    Async, // Default: Background thread
+    Sync   // Immediate: Current thread
+};
+
+} // namespace eventsystem
