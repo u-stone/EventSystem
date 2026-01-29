@@ -13,6 +13,20 @@
 
 namespace eventsystem {
 
+namespace detail {
+    // 1. Promote const char* / char* to std::string
+    inline std::string promote(const char* s) { return std::string(s); }
+    inline std::string promote(char* s) { return std::string(s); }
+    
+    // 2. Pass other types as-is
+    template <typename T>
+    decltype(auto) promote(T&& arg) { return std::forward<T>(arg); }
+    
+    // 3. Helper to get the promoted type
+    template <typename T>
+    using promoted_type = std::decay_t<decltype(promote(std::declval<T>()))>;
+}
+
 class EVENTSYSTEM_API MessageCenter {
 public:
     using SubscriptionToken = size_t;
@@ -47,14 +61,15 @@ public:
 
     template <typename... Args>
     void PublishSync(const std::string& topic, Args&&... args) {
-        Dispatch<typename std::decay<Args>::type...>(topic, std::forward<Args>(args)...);
+        Dispatch<detail::promoted_type<Args>...>(topic, detail::promote(std::forward<Args>(args))...);
     }
 
     template <typename... Args>
     void PublishAsync(const std::string& topic, Args&&... args) {
-        auto task = [this, topic, args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
+        auto task = [this, topic, args = std::make_tuple(detail::promote(std::forward<Args>(args))...)]() mutable {
             std::apply([this, &topic](auto&&... unpackedArgs) {
-                this->Dispatch<typename std::decay<Args>::type...>(topic, std::forward<decltype(unpackedArgs)>(unpackedArgs)...);
+                this->Dispatch<typename std::decay<decltype(unpackedArgs)>::type...>(
+                    topic, std::forward<decltype(unpackedArgs)>(unpackedArgs)...);
             }, std::move(args));
         };
         EnqueueTask(std::move(task));
@@ -109,9 +124,10 @@ namespace detail {
         using args_tuple = std::tuple<Args...>;
     };
 
+    // Helper that decays argument types to ensure signature consistency (e.g. const string& -> string)
     template <typename Callback, typename... Args>
-    MessageCenter::SubscriptionToken SubscribeHelper(const std::string& topic, Callback&& cb, std::tuple<Args...>*) {
-        return MessageCenter::Instance().Subscribe<Args...>(topic, std::function<void(Args...)>(std::forward<Callback>(cb)));
+    MessageCenter::SubscriptionToken SubscribeHelperDecayed(const std::string& topic, Callback&& cb, std::tuple<Args...>*) {
+        return MessageCenter::Instance().Subscribe<std::decay_t<Args>...>(topic, std::function<void(std::decay_t<Args>...)>(std::forward<Callback>(cb)));
     }
 }
 
@@ -122,7 +138,8 @@ MessageCenter::SubscriptionToken SubscribeMessage(const std::string& topic, Call
     } else {
         using Traits = detail::function_traits<std::decay_t<Callback>>;
         using ArgsTuple = typename Traits::args_tuple;
-        return detail::SubscribeHelper(topic, std::forward<Callback>(callback), (ArgsTuple*)nullptr);
+        // Use the Decayed helper to normalize types (e.g. const std::string& -> std::string)
+        return detail::SubscribeHelperDecayed(topic, std::forward<Callback>(callback), (ArgsTuple*)nullptr);
     }
 }
 
@@ -149,11 +166,11 @@ inline void UnsubscribeMessage(const std::string& topic) {
     MessageCenter::Instance().Unsubscribe(topic);
 }
 
-inline void SetMessageCenterPublishMode(eventsystem::PublishMode mode) {
+inline void SetMessageCenterPublishMode(PublishMode mode) {
     MessageCenter::Instance().SetPublishMode(mode);
 }
 
-inline eventsystem::PublishMode GetMessageCenterPublishMode() {
+inline PublishMode GetMessageCenterPublishMode() {
     return MessageCenter::Instance().GetPublishMode();
 }
 

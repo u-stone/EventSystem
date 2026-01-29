@@ -190,3 +190,93 @@ TEST_F(MessageCenterTest, MemberFunctionBind) {
     EXPECT_EQ(tester.val, 456);
     UnsubscribeMessage("member_bind", token);
 }
+
+// --- String Literal Promotion Test ---
+
+TEST_F(MessageCenterTest, PublishStringLiteral) {
+    std::string received;
+    auto token = SubscribeMessage<std::string>("literal_test", [&](const std::string& msg) {
+        received = msg;
+    });
+
+    // Pass const char*, expecting auto-promotion to std::string
+    PublishMessageSync("literal_test", "hello world");
+    
+    EXPECT_EQ(received, "hello world");
+    UnsubscribeMessage("literal_test", token);
+}
+
+TEST_F(MessageCenterTest, ImplicitRefToStringMatch) {
+    std::string received;
+    // Subscriber uses const std::string& (implicit)
+    // Should be decayed to std::string for signature matching
+    auto token = SubscribeMessage("implicit_ref_test", [&](const std::string& s) {
+        received = s;
+    });
+
+    // Publisher uses std::string
+    std::string msg = "works";
+    PublishMessageSync("implicit_ref_test", msg);
+
+    EXPECT_EQ(received, "works");
+    UnsubscribeMessage("implicit_ref_test", token);
+}
+
+// --- Additional Tests for Safety & Reference Wrapper ---
+
+TEST_F(MessageCenterTest, AsyncLifetimeSafety) {
+    std::atomic<int> received_val{0};
+    auto token = SubscribeMessage("async_lifetime", [&](const std::vector<int>& vec) {
+        // If the vector was a dangling reference, accessing it would crash or give garbage.
+        // We expect a valid copy.
+        if (!vec.empty()) {
+            received_val = vec[0];
+        }
+    });
+
+    {
+        std::vector<int> temp_vec = { 999 };
+        // Publish async. temp_vec will be destroyed immediately after this block.
+        // The system MUST copy it.
+        PublishMessageAsync("async_lifetime", temp_vec);
+    } // temp_vec destroyed here
+
+    // Give time for worker to process
+    int retries = 0;
+    while(received_val == 0 && retries++ < 10) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    EXPECT_EQ(received_val, 999);
+    UnsubscribeMessage("async_lifetime", token);
+}
+
+TEST_F(MessageCenterTest, ReferenceWrapperModification) {
+    int target = 10;
+    // To modify 'target', we must explicitly subscribe to reference_wrapper<int>
+    // Implicit deduction would decay int& to int (copy).
+    // So we must be explicit or use a lambda argument that deduces to it? 
+    // Lambda argument `std::reference_wrapper<int>`? No, lambda arg should be `int&` or `reference_wrapper`.
+    
+    auto token = SubscribeMessage<std::reference_wrapper<int>>("ref_wrapper_test", [](std::reference_wrapper<int> val) {
+        val.get() = 20;
+    });
+
+    PublishMessageSync("ref_wrapper_test", std::ref(target));
+    
+    EXPECT_EQ(target, 20);
+    UnsubscribeMessage("ref_wrapper_test", token);
+}
+
+TEST_F(MessageCenterTest, ImplicitDeductionStringLiteral) {
+    std::string received;
+    // Implicit deduction from lambda taking const std::string&
+    // This relies on BOTH traits decay AND string literal promotion working together.
+    auto token = SubscribeMessage("implicit_string_literal", [&](const std::string& s) {
+        received = s;
+    });
+
+    // Publish const char*
+    PublishMessageSync("implicit_string_literal", "hello implicit");
+    
+    EXPECT_EQ(received, "hello implicit");
+    UnsubscribeMessage("implicit_string_literal", token);
+}

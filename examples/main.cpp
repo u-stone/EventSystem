@@ -118,6 +118,59 @@ int main() {
     MessageCenter::Instance().PrintSubscriptions();
     EventCenter::PrintSubscriptions();
 
+    // 9. Type Promotion Demo (const char* -> std::string)
+    std::cout << "\n[9] Type Promotion Demo" << std::endl;
+    auto promotionToken = SubscribeMessage<std::string>("promotion_test", [](const std::string& msg) {
+        std::cout << "    -> Received (std::string): " << msg << std::endl;
+    });
+    
+    // Publishing const char*, automatically promoted to std::string
+    PublishMessage("promotion_test", "This is a string literal"); 
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    UnsubscribeMessage("promotion_test", promotionToken);
+
+    // 10. Lambda Capture Demo (capturing this)
+    std::cout << "\n[10] Lambda Capture Demo" << std::endl;
+    class Player {
+    public:
+        std::string name;
+        int score = 0;
+        size_t token = 0;
+
+        Player(std::string n) : name(n) {
+            // Capture 'this' to access member variables (int arg)
+            token = SubscribeMessage<int>("add_score", [this](int points) {
+                this->score += points;
+                std::cout << "    -> " << this->name << " gained " << points << " points. Total: " << this->score << std::endl;
+            });
+
+            // Capture 'this' with std::string arg (demonstrating promotion too)
+            SubscribeMessage<std::string>("player_msg", [this](const std::string& msg) {
+                std::cout << "    -> " << this->name << " says: " << msg << std::endl;
+            });
+        }
+
+        ~Player() {
+            UnsubscribeMessage("add_score", token);
+            UnsubscribeMessage("player_msg");
+            // Note: In a real app, you should store and unsubscribe the second token too.
+            // For this short-lived demo scope, it's cleaned up by the system on shutdown or we can unsubscribe all for topic.
+        }
+    };
+
+    {
+        Player p1("Mario");
+        PublishMessageSync("add_score", 100);
+        PublishMessageSync("add_score", 50);
+        PublishMessageSync("player_msg", "It's a me!"); // String literal promotion
+        // p1 goes out of scope here
+    }
+    std::cout << "    -> Player destroyed, subscription removed." << std::endl;
+
+    // Verify unsubscription
+    PublishMessageSync("add_score", 10); // Should print nothing
+
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     UnsubscribeMessage("number", token4);
     UnsubscribeEvent(eventHandle);
