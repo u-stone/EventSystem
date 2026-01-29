@@ -105,7 +105,7 @@ UnregisterStaticEventHandler<MyEvent>();
 ```cpp
 #include "EventSystem/MessageCenter.h"
 
-// 自动推导为 std::function<void(const std::string&)>
+// 自动推导为 std::function<void(std::string)>
 auto token = eventsystem::SubscribeMessage("log", [](const std::string& msg) {
     std::cout << "Log: " << msg << std::endl;
 });
@@ -128,7 +128,7 @@ auto token3 = eventsystem::SubscribeMessage<>("app_start", []() {
 
 ### 2.2 发布 (Publish)
 
-发布时的参数类型必须与订阅者的签名**精确匹配**。
+发布时的参数类型必须与订阅者的签名匹配（系统会自动处理常见转换）。
 
 ```cpp
 // 1. 默认发布 (取决于全局模式，默认为 Async)
@@ -158,30 +158,22 @@ EventCenter::PrintSubscriptions();
 MessageCenter::Instance().PrintSubscriptions();
 ```
 
-### 3.4 重要：类型匹配规则 (Type Matching)
+### 3.4 类型匹配与自动转换规则
 
-在 `MessageCenter` 中，**Topic 只是第一层过滤，函数签名（参数类型）是第二层过滤**。
+`MessageCenter` 引入了多项机制来简化强类型匹配带来的负担，并增强了异步安全性。
 
-#### 3.4.1 精确匹配要求
-发布者提供的参数类型列表必须与订阅者注册时的类型列表**完全一致**（包括参数顺序）。如果类型不匹配，订阅者的回调将**不会被触发**。
+#### 3.4.1 自动类型退化 (Type Decay)
+为了确保异步安全性并解决 `std::any` 严格匹配问题，系统在订阅时会自动将参数类型进行 **Decay** 处理（去除 `&`、`const`、`volatile`）。
+*   如果你写 `SubscribeMessage("topic", [](const std::string& s){...})`，系统内部会将其标准化为 `void(std::string)`。
+*   **好处**：这保证了即使发布者提供的是值类型（如异步拷贝后的副本），也能成功匹配。
 
-*   **匹配示例**:
-    ```cpp
-    SubscribeMessage<int, float>("topic", ...);
-    PublishMessage("topic", 1, 2.0f); // 成功触发
-    ```
+#### 3.4.2 字符串字面量自动提升 (String Promotion)
+在发布消息时，系统会自动将 `const char*` 和 `char*` 类型提升为 `std::string`。
+*   **示例**：`PublishMessage("topic", "hello")` 会被视为发布 `std::string` 类型。
+*   这使得字面量发布能完美匹配期待 `std::string` 或 `const std::string&` 的订阅者。
 
-*   **不匹配示例**:
-    ```cpp
-    SubscribeMessage<int>("topic", ...);
-    PublishMessage("topic", 1.0f); // 失败：订阅者期待 int，发布者提供 float
-    ```
-
-#### 3.4.2 常见陷阱：字符串字面量
-在 C++ 中，`"Hello"` 的类型是 `const char*` 而不是 `std::string`。系统会自动将发布时的 `const char*` 衰减处理，但订阅者通常应声明为 `std::string` 或 `const std::string&` 以获得最佳兼容性。
-
-#### 3.4.3 安全忽略
-当类型不匹配时，系统会为了程序的鲁棒性而**安全地忽略**该次调用，并会在标准错误流（stderr）中打印一条调试信息，而不会导致程序崩溃。
+#### 3.4.3 精确匹配与安全忽略
+除了上述自动转换外，其他类型（如 `int` vs `float`）仍需精确匹配。如果类型不匹配，系统会**安全忽略**该次调用并在 stderr 打印警告，而不会崩溃。
 
 ---
 
