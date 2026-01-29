@@ -84,7 +84,7 @@ public:
 - **优化**: 内部不需要分配复杂的对象，直接存储函数指针。
 - **注销**: 支持 `UnregisterStaticEventHandler(handle)` 或 `UnregisterStaticEventHandler<TEvent>()`。
 
-## 4. 异步分发模型
+## 4. 异步分发模型与动态切换
 
 `AsyncEventCenter` 维护了一个后台工作线程。
 
@@ -96,6 +96,11 @@ public:
     - 取出队首事件。
     - 检查是否到期 (对于延时事件)。
     - 调用 `EventRegistry::DispatchEvent(type_index, event_data)`。
+
+### 4.1 动态模式切换 (Dynamic Switching)
+系统支持在运行时通过 `EventRegistry::SetPublishMode(PublishMode::Sync/Async)` 切换 `PublishEvent` 的默认行为。
+- 这允许开发者在调试阶段强制所有事件同步执行，以便于堆栈追踪。
+- 该状态存储在 `EventRegistry` 的隐藏实现中，线程安全。
 
 ## 5. 总结
 

@@ -149,4 +149,12 @@ inline void UnsubscribeMessage(const std::string& topic) {
     MessageCenter::Instance().Unsubscribe(topic);
 }
 
+inline void SetMessageCenterPublishMode(eventsystem::PublishMode mode) {
+    MessageCenter::Instance().SetPublishMode(mode);
+}
+
+inline eventsystem::PublishMode GetMessageCenterPublishMode() {
+    return MessageCenter::Instance().GetPublishMode();
+}
+
 } // namespace eventsystem

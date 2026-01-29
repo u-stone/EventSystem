@@ -250,4 +250,14 @@ inline void UnregisterStaticEventHandler()
     eventsystem::EventRegistry::UnregisterAllHandlers<TEvent>();
 }
 
+inline void SetEventCenterPublishMode(eventsystem::PublishMode mode)
+{
+    eventsystem::EventRegistry::SetPublishMode(mode);
+}
+
+inline eventsystem::PublishMode GetEventCenterPublishMode()
+{
+    return eventsystem::EventRegistry::GetPublishMode();
+}
+
 } // namespace eventsystem
