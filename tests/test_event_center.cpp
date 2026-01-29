@@ -243,8 +243,10 @@ TEST_F(EventSystemTest, EventsAreProcessedInTemporalOrder) {
 
     // Handler that records the order of events received
     auto handler = [&](const TestEvent1& event) {
-        std::lock_guard<std::mutex> lock(vector_mutex);
-        received_order.push_back(event.value);
+        {
+            std::lock_guard<std::mutex> lock(vector_mutex);
+            received_order.push_back(event.value);
+        }
         if (event.value == 1) sync1.notify();
         else if (event.value == 2) sync2.notify();
         else if (event.value == 3) sync3.notify();

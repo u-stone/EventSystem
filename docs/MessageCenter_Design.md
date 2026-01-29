@@ -109,7 +109,15 @@ C++17 中，无法直接从 Lambda 表达式推导 `std::function<void(Args...)>
     ```
     使用示例：`SubscribeMessage("topic", [](int i){})` (自动推导为 `<int>`)。
 
-## 4. 总结
+## 4. 动态发布模式 (Dynamic Publish Mode)
+系统引入了 `SetPublishMode(PublishMode::Sync/Async)`。
+`PublishMessage` (无后缀) 会检查该模式：
+- `Sync`: 直接调用 `Dispatch`，在当前线程执行。
+- `Async`: 调用 `PublishAsync`，入队到工作线程。
+
+这为调试和灵活控制提供了极大的便利。
+
+## 5. 总结
 该设计在保持接口简洁的同时，极大地扩展了灵活性：
 1.  **灵活性**: 支持任意数量和类型的参数。
 2.  **安全性**: 编译期（模板实例化）和运行期（any_cast）双重保证类型安全。
