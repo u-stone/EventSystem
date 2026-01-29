@@ -95,13 +95,18 @@ private:
     void Dispatch(const std::string& topic, Args... args) {
         std::vector<std::any> callbacksToInvoke = GetCallbacksInternal(topic);
         for (const auto& anyCb : callbacksToInvoke) {
-            try {
-                using FunctionType = std::function<void(Args...)>;
-                if (auto* func = std::any_cast<FunctionType>(&anyCb)) {
+            using FunctionType = std::function<void(Args...)>;
+            if (auto* func = std::any_cast<FunctionType>(&anyCb)) {
+                try {
                     (*func)(args...);
+                } catch (const std::exception& e) {
+                    std::cerr << "[MessageCenter] Exception during dispatch for '" << topic << "': " << e.what() << std::endl;
                 }
-            } catch (const std::exception& e) {
-                std::cerr << "[MessageCenter] Exception during dispatch for '" << topic << "': " << e.what() << std::endl;
+            } else {
+                // Type mismatch logging to help users identify why their message was ignored.
+                std::cerr << "[MessageCenter] Mismatch function prototype for topic '" << topic << "':\n"
+                          << "  Publisher provided: " << typeid(FunctionType).name() << "\n"
+                          << "  Subscriber expects: " << anyCb.type().name() << std::endl;
             }
         }
     }
