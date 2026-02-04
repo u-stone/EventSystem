@@ -46,4 +46,4 @@ target_include_directories(EventSystemStatic
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
-add_library(eventsystem::static ALIAS EventSystemStatic)
+add_library(eventsystem::eventsystem_static ALIAS EventSystemStatic)
