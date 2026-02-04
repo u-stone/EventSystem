@@ -33,6 +33,13 @@ public:
 
     static MessageCenter& Instance();
 
+    /**
+     * @brief Explicitly destroys the singleton instance.
+     * Important for avoiding deadlocks on Windows DLL unload if the worker thread is running.
+     * Should be called before main() exits.
+     */
+    static void Destroy();
+
     MessageCenter(const MessageCenter&) = delete;
     MessageCenter& operator=(const MessageCenter&) = delete;
 
@@ -113,6 +120,56 @@ private:
 
     struct Impl;
     Impl* m_impl;
+};
+
+/**
+ * @brief RAII wrapper for automatic unsubscription.
+ * Useful for managing subscription lifetime in dynamic modules (DLLs) to prevent dangling callbacks.
+ */
+class ScopedSubscription {
+public:
+    ScopedSubscription() = default;
+
+    ScopedSubscription(const std::string& topic, MessageCenter::SubscriptionToken token)
+        : m_topic(topic), m_token(token), m_valid(true) {}
+
+    ~ScopedSubscription() {
+        Reset();
+    }
+
+    ScopedSubscription(ScopedSubscription&& other) noexcept {
+        MoveFrom(std::move(other));
+    }
+
+    ScopedSubscription& operator=(ScopedSubscription&& other) noexcept {
+        if (this != &other) {
+            Reset();
+            MoveFrom(std::move(other));
+        }
+        return *this;
+    }
+
+    ScopedSubscription(const ScopedSubscription&) = delete;
+    ScopedSubscription& operator=(const ScopedSubscription&) = delete;
+
+    void Reset() {
+        if (m_valid) {
+            MessageCenter::Instance().Unsubscribe(m_topic, m_token);
+            m_valid = false;
+        }
+    }
+
+private:
+    void MoveFrom(ScopedSubscription&& other) {
+        m_topic = std::move(other.m_topic);
+        m_token = other.m_token;
+        m_valid = other.m_valid;
+        other.m_valid = false;
+    }
+
+    std::string m_topic;
+    MessageCenter::SubscriptionToken m_token = 0;
+    bool m_valid = false;
 };
 
 // ... Helpers ...

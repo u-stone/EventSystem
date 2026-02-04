@@ -176,5 +176,10 @@ int main() {
     UnsubscribeEvent(eventHandle);
 
     std::cout << "\n--- Demo Finished ---" << std::endl;
+
+    // Explicitly destroy singletons to stop worker threads cleanly
+    MessageCenter::Destroy();
+    AsyncEventCenter::Destroy();
+
     return 0;
 }
