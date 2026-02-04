@@ -193,3 +193,78 @@ SetEventCenterPublishMode(PublishMode::Async);
 ```
 
 **注意**：显式命名的 API (如 `PublishEventSync`, `PublishMessageAsync` 等) 不受此模式影响。
+
+---
+
+## 5. 生命周期管理 (Lifecycle Management)
+
+在 Windows DLL 环境下，静态对象的自动析构可能引发死锁 (Loader Lock Deadlock)，尤其是当对象内部包含工作线程时。
+为了确保跨模块安全，本系统采用了 **显式生命周期管理** 策略。
+
+### 5.1 手动销毁 (推荐)
+建议在 `main` 函数退出前，显式调用 `Destroy()` 接口。
+
+```cpp
+#include "EventSystem/MessageCenter.h"
+#include "EventSystem/EventCenter.h"
+
+int main() {
+    // ... 业务逻辑 ...
+
+    // 程序退出前清理
+    eventsystem::MessageCenter::Destroy();
+    eventsystem::AsyncEventCenter::Destroy(); // 如果使用了 AsyncEventCenter
+    eventsystem::SyncEventCenter::Destroy();  // 如果使用了 SyncEventCenter
+    return 0;
+}
+```
+
+### 5.2 Leaky Singleton (默认)
+如果您忘记调用 `Destroy()`，系统默认采用 Leaky Singleton 模式（即不释放单例内存）。
+*   **优点**：完全避免了 DLL 卸载时的死锁崩溃风险。
+*   **缺点**：会有少量内存泄漏（通常操作系统会在进程结束时回收，影响不大）。
+*   **结论**：如果您不确定，**什么都不做** 比 **在静态析构函数中调用** 更安全。
+
+---
+
+## 6. 跨模块 (DLL) 开发最佳实践
+
+在涉及多个 DLL（如 Host 程序 + 多个 Plugin DLL）的大型项目中，正确管理 EventSystem 的链接方式和订阅生命周期至关重要。
+
+### 6.1 链接方式 (Linking Strategy)
+
+**强烈推荐**：将 `EventSystem` 编译为**动态链接库 (Shared Library / DLL)**，并让所有模块（Host 和 Plugins）都动态链接到它。
+
+*   **原因**：这确保了整个进程中只有一个 `EventSystem` 单例实例，从而实现跨模块的事件通信。
+*   **错误做法**：如果在每个 DLL 中静态链接 (`STATIC`) EventSystem 源码，每个模块将拥有自己独立的单例副本，导致事件无法跨模块互通，且可能引发 CRT 堆隔离问题。
+
+### 6.2 单例销毁责任 (Responsibility)
+
+*   **Host (宿主程序)**：负责在程序退出时调用 `Destroy()`。
+*   **Plugin (插件模块)**：**严禁**调用 `Destroy()`。插件只是使用者，不拥有单例的所有权。
+
+### 6.3 避免悬垂回调 (Dangling Callbacks)
+
+当一个 Plugin 被动态卸载 (Unload) 时，如果它注册的回调函数没有被注销，EventSystem 中将残留指向无效内存的指针。一旦触发该事件，程序将立即崩溃。
+
+**解决方案：使用 `ScopedSubscription` (RAII)**
+
+我们提供了 `ScopedSubscription` 辅助类，利用 RAII 机制自动管理订阅生命周期。
+
+```cpp
+class MyPluginModule {
+public:
+    void Init() {
+        // 订阅并托管 Token
+        auto token = eventsystem::SubscribeMessage("login", ...);
+        m_sub = eventsystem::ScopedSubscription("login", token);
+    }
+    
+    // 析构函数自动调用 Unsubscribe，无需手动管理
+    ~MyPluginModule() = default;
+
+private:
+    eventsystem::ScopedSubscription m_sub;
+};
+```
+**规则**：所有动态加载模块**必须**使用 `ScopedSubscription` 管理其注册的事件，或者在卸载前严格保证手动注销所有事件。

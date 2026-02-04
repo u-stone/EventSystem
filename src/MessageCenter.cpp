@@ -85,9 +85,27 @@ struct MessageCenter::Impl {
     }
 };
 
+namespace {
+    static MessageCenter* g_instance = nullptr;
+    static std::mutex g_creationMutex;
+}
+
 MessageCenter& MessageCenter::Instance() {
-    static MessageCenter inst;
-    return inst;
+    if (!g_instance) {
+        std::lock_guard<std::mutex> lock(g_creationMutex);
+        if (!g_instance) {
+            g_instance = new MessageCenter();
+        }
+    }
+    return *g_instance;
+}
+
+void MessageCenter::Destroy() {
+    std::lock_guard<std::mutex> lock(g_creationMutex);
+    if (g_instance) {
+        delete g_instance;
+        g_instance = nullptr;
+    }
 }
 
 MessageCenter::MessageCenter() : m_impl(new Impl()) {}

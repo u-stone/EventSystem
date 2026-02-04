@@ -280,3 +280,19 @@ TEST_F(MessageCenterTest, ImplicitDeductionStringLiteral) {
     EXPECT_EQ(received, "hello implicit");
     UnsubscribeMessage("implicit_string_literal", token);
 }
+
+TEST_F(MessageCenterTest, ScopedSubscriptionRAII) {
+    int call_count = 0;
+    {
+        // Scope block
+        auto token = SubscribeMessage<>("scoped_test", [&](){ call_count++; });
+        ScopedSubscription scope("scoped_test", token);
+        
+        PublishMessageSync("scoped_test");
+        EXPECT_EQ(call_count, 1);
+        // scope destroys here -> Unsubscribe
+    }
+
+    PublishMessageSync("scoped_test");
+    EXPECT_EQ(call_count, 1); // Should not increase
+}
