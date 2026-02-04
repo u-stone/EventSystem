@@ -1,6 +1,8 @@
 #pragma once
 
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(EVENTSYSTEM_STATIC)
+    #define EVENTSYSTEM_API
+#elif defined(_WIN32) || defined(_WIN64)
     #ifdef EventSystem_EXPORTS
         #define EVENTSYSTEM_API __declspec(dllexport)
     #else
