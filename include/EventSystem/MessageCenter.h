@@ -46,8 +46,8 @@ public:
     ~MessageCenter();
 
     /**
-     * @brief Set the default publish mode (Async or Sync).
-     * Default is Async.
+     * @brief Set the default publish mode (Async, Sync, or MainThread).
+     * Default is MainThread (Queued for Update() in the main game loop).
      */
     void SetPublishMode(PublishMode mode);
 
@@ -55,6 +55,19 @@ public:
      * @brief Get the current publish mode.
      */
     PublishMode GetPublishMode() const;
+
+    /**
+     * @brief Process pending messages in the MainThread queue.
+     * Should be called once per frame in the main game loop.
+     */
+    void Update();
+
+    /**
+     * @brief Set the maximum time (in milliseconds) the Update() method is allowed to run.
+     * If 0, it processes all pending messages.
+     * @param ms Maximum duration in milliseconds.
+     */
+    void SetMaxUpdateDuration(double ms);
 
     template <typename... Args>
     SubscriptionToken Subscribe(const std::string& topic, std::function<void(Args...)> callback) {
@@ -84,9 +97,24 @@ public:
     }
 
     template <typename... Args>
+    void PublishMainThread(const std::string& topic, Args&&... args) {
+        auto task = [this, topic, 
+                     args = std::make_tuple(detail::promote(std::forward<Args>(args))...)]() mutable {
+            std::apply([this, &topic](auto&&... unpackedArgs) {
+                this->Dispatch<typename std::decay<decltype(unpackedArgs)>::type...>(
+                    topic, std::forward<decltype(unpackedArgs)>(unpackedArgs)...);
+            }, std::move(args));
+        };
+        EnqueueMainThreadTask(std::move(task));
+    }
+
+    template <typename... Args>
     void Publish(const std::string& topic, Args&&... args) {
-        if (GetPublishMode() == PublishMode::Sync) {
+        PublishMode mode = GetPublishMode();
+        if (mode == PublishMode::Sync) {
             PublishSync(topic, std::forward<Args>(args)...);
+        } else if (mode == PublishMode::MainThread) {
+            PublishMainThread(topic, std::forward<Args>(args)...);
         } else {
             PublishAsync(topic, std::forward<Args>(args)...);
         }
@@ -97,6 +125,7 @@ private:
     
     SubscriptionToken SubscribeInternal(const std::string& topic, std::any callback);
     void EnqueueTask(std::function<void()> task);
+    void EnqueueMainThreadTask(std::function<void()> task);
     std::vector<std::any> GetCallbacksInternal(const std::string& topic);
 
     template <typename... Args>
@@ -227,6 +256,11 @@ void PublishMessageAsync(const std::string& topic, Args&&... args) {
 }
 
 template <typename... Args>
+void PublishMessageMainThread(const std::string& topic, Args&&... args) {
+    MessageCenter::Instance().PublishMainThread(topic, std::forward<Args>(args)...);
+}
+
+template <typename... Args>
 void PublishMessageSync(const std::string& topic, Args&&... args) {
     MessageCenter::Instance().PublishSync(topic, std::forward<Args>(args)...);
 }
@@ -237,6 +271,14 @@ inline void UnsubscribeMessage(const std::string& topic, MessageCenter::Subscrip
 
 inline void UnsubscribeMessage(const std::string& topic) {
     MessageCenter::Instance().Unsubscribe(topic);
+}
+
+inline void UpdateMessageCenter() {
+    MessageCenter::Instance().Update();
+}
+
+inline void SetMessageCenterMaxUpdateDuration(double ms) {
+    MessageCenter::Instance().SetMaxUpdateDuration(ms);
 }
 
 inline void SetMessageCenterPublishMode(PublishMode mode) {

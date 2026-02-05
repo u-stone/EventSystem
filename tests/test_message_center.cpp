@@ -5,6 +5,7 @@
 #include <thread>
 #include <chrono>
 #include <functional> 
+#include <future>
 
 using namespace eventsystem;
 
@@ -298,4 +299,89 @@ TEST_F(MessageCenterTest, ScopedSubscriptionRAII) {
 
     PublishMessageSync("scoped_test");
     EXPECT_EQ(call_count, 1); // Should not increase
+}
+
+TEST_F(MessageCenterTest, MainThreadUpdate) {
+    bool executed = false;
+    SubscribeMessage<int>("MainThreadTopic", [&](int val) {
+        executed = true;
+        EXPECT_EQ(val, 42);
+    });
+
+    // Explicitly publish to MainThread queue
+    MessageCenter::Instance().PublishMainThread("MainThreadTopic", 42);
+
+    // Should not have executed yet
+    EXPECT_FALSE(executed);
+
+    // Run update to process queue
+    MessageCenter::Instance().Update();
+
+    EXPECT_TRUE(executed);
+}
+
+TEST_F(MessageCenterTest, DefaultPublishModeIsMainThread) {
+    // New default is MainThread
+    // Reset publish mode to default (MainThread)
+    MessageCenter::Instance().SetPublishMode(eventsystem::PublishMode::MainThread);
+    
+    bool executed = false;
+    SubscribeMessage<>("DefaultTopic", [&](){ executed = true; });
+
+    MessageCenter::Instance().Publish("DefaultTopic"); // Should go to MainThread queue
+    EXPECT_FALSE(executed);
+
+    MessageCenter::Instance().Update();
+    EXPECT_TRUE(executed);
+}
+
+TEST_F(MessageCenterTest, TimeSlicing) {
+    std::atomic<int> executionCount{0};
+    SubscribeMessage<>("HeavyTopic", [&](){
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        executionCount++;
+    });
+
+    // Queue 5 tasks, each taking ~10ms
+    for(int i=0; i<5; ++i) {
+        MessageCenter::Instance().PublishMainThread("HeavyTopic");
+    }
+
+    // Allow only 25ms (enough for 2 tasks. 10ms + 10ms = 20ms < 25ms. 3rd would make it > 25ms but check is AFTER execution)
+    // Execution 1: 10ms. elapsed 10 < 25.
+    // Execution 2: 20ms. elapsed 20 < 25.
+    // Execution 3: 30ms. elapsed 30 >= 25 -> STOP.
+    MessageCenter::Instance().SetMaxUpdateDuration(25.0); 
+    MessageCenter::Instance().Update();
+
+    EXPECT_GE(executionCount, 2);
+    EXPECT_LE(executionCount, 3); 
+
+    // Process remaining
+    MessageCenter::Instance().SetMaxUpdateDuration(0); // Unlimited
+    MessageCenter::Instance().Update();
+    EXPECT_EQ(executionCount, 5);
+}
+
+TEST_F(MessageCenterTest, MixedModes) {
+    std::promise<void> asyncPromise;
+    auto future = asyncPromise.get_future();
+    bool mainExecuted = false;
+
+    SubscribeMessage<std::string>("MixedTopic", [&](std::string source){
+        if (source == "Async") asyncPromise.set_value();
+        if (source == "Main") mainExecuted = true;
+    });
+
+    MessageCenter::Instance().PublishAsync("MixedTopic", std::string("Async"));
+    MessageCenter::Instance().PublishMainThread("MixedTopic", std::string("Main"));
+
+    // Async should finish independently
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    
+    // Main shouldn't have run yet
+    EXPECT_FALSE(mainExecuted);
+
+    MessageCenter::Instance().Update();
+    EXPECT_TRUE(mainExecuted);
 }

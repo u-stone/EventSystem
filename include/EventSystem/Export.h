@@ -24,8 +24,9 @@ namespace eventsystem {
  * @brief Common publishing modes for both EventCenter and MessageCenter.
  */
 enum class PublishMode {
-    Async, // Default: Background thread
-    Sync   // Immediate: Current thread
+    Async,      // Background thread
+    Sync,       // Immediate: Current thread
+    MainThread  // Queued: Processed in Update() on the main thread (Default for Game Engines)
 };
 
 } // namespace eventsystem

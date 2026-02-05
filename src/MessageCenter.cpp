@@ -23,9 +23,16 @@ struct MessageCenter::Impl {
     std::queue<std::function<void()>> m_queue;
     std::mutex m_queueMutex;
     std::condition_variable m_cv;
+
+    // Main thread queue support
+    std::queue<std::function<void()>> m_mainThreadQueue;
+    std::mutex m_mainQueueMutex;
+    std::atomic<double> m_maxUpdateMs{0.0};
+
     std::thread m_worker;
     bool m_running{true};
-    std::atomic<PublishMode> m_publishMode{PublishMode::Async};
+    // Default to MainThread as per new requirement
+    std::atomic<PublishMode> m_publishMode{PublishMode::MainThread};
 
     Impl() {
         m_worker = std::thread(&Impl::WorkerLoop, this);
@@ -137,7 +144,58 @@ PublishMode MessageCenter::GetPublishMode() const {
     if (m_impl) {
         return m_impl->m_publishMode.load();
     }
-    return PublishMode::Async;
+    return PublishMode::MainThread;
+}
+
+void MessageCenter::SetMaxUpdateDuration(double ms) {
+    if (m_impl) {
+        m_impl->m_maxUpdateMs.store(ms);
+    }
+}
+
+void MessageCenter::Update() {
+    if (!m_impl) return;
+
+    auto start = std::chrono::steady_clock::now();
+    double maxDuration = m_impl->m_maxUpdateMs.load();
+    
+    while (true) {
+        std::function<void()> task;
+        {
+            std::lock_guard<std::mutex> lock(m_impl->m_mainQueueMutex);
+            if (m_impl->m_mainThreadQueue.empty()) {
+                return; // Queue empty, done
+            }
+            task = std::move(m_impl->m_mainThreadQueue.front());
+            m_impl->m_mainThreadQueue.pop();
+        }
+
+        if (task) {
+            try {
+                task();
+            } catch (const std::exception& e) {
+                std::cerr << "[MessageCenter] Exception during MainThread update: " << e.what() << std::endl;
+            } catch (...) {
+                std::cerr << "[MessageCenter] Unknown exception during MainThread update." << std::endl;
+            }
+        }
+
+        // Check for timeout if a limit is set
+        if (maxDuration > 0.0) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration<double, std::milli>(now - start).count();
+            if (elapsed >= maxDuration) {
+                // Check if more tasks remain
+                std::lock_guard<std::mutex> lock(m_impl->m_mainQueueMutex);
+                if (!m_impl->m_mainThreadQueue.empty()) {
+                    std::cerr << "[MessageCenter] Warning: Update time limit exceeded (" 
+                              << elapsed << "ms >= " << maxDuration << "ms). "
+                              << m_impl->m_mainThreadQueue.size() << " messages remaining." << std::endl;
+                }
+                break;
+            }
+        }
+    }
 }
 
 MessageCenter::SubscriptionToken MessageCenter::SubscribeInternal(const std::string& topic, 
@@ -177,6 +235,11 @@ void MessageCenter::EnqueueTask(std::function<void()> task) {
         m_impl->m_queue.emplace(std::move(task));
     }
     m_impl->m_cv.notify_one();
+}
+
+void MessageCenter::EnqueueMainThreadTask(std::function<void()> task) {
+    std::lock_guard<std::mutex> lock(m_impl->m_mainQueueMutex);
+    m_impl->m_mainThreadQueue.emplace(std::move(task));
 }
 
 std::vector<std::any> MessageCenter::GetCallbacksInternal(const std::string& topic) {
