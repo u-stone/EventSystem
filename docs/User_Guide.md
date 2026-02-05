@@ -131,14 +131,39 @@ auto token3 = eventsystem::SubscribeMessage<>("app_start", []() {
 发布时的参数类型必须与订阅者的签名匹配（系统会自动处理常见转换）。
 
 ```cpp
-// 1. 默认发布 (取决于全局模式，默认为 Async)
+// 1. 默认发布 (取决于全局模式，默认为 MainThread)
 eventsystem::PublishMessage("log", "System running"); 
 
-// 2. 显式异步发布
+// 2. 显式主线程发布 (推荐用于游戏引擎)
+eventsystem::PublishMessageMainThread("ui_refresh", "Done");
+
+// 3. 显式异步发布 (后台线程处理)
 eventsystem::PublishMessageAsync("mouse_click", 100, 200);
 
-// 3. 显式同步发布
+// 4. 显式同步发布 (立即在当前线程执行)
 eventsystem::PublishMessageSync("log", "Immediate log");
+```
+
+### 2.3 主线程更新 (Update Loop)
+如果使用了 `MainThread` 模式（默认模式），必须在主线程中轮询 `Update`。
+
+```cpp
+void GameLoop() {
+    while (running) {
+        // ... 其他逻辑 ...
+        
+        // 处理消息中心的主线程队列
+        eventsystem::UpdateMessageCenter();
+    }
+}
+```
+
+### 2.4 时间切片 (Time Slicing)
+为了防止单帧处理消息过久导致卡顿，可以设置最大耗时。
+
+```cpp
+// 设置每帧最多处理 5.0 毫秒的消息
+eventsystem::SetMessageCenterMaxUpdateDuration(5.0);
 ```
 
 ---
@@ -172,7 +197,7 @@ PrintMessageSubscriptions(); // MessageCenter 订阅状态
 
 ## 4. 动态模式切换 (Dynamic Mode Switching)
 
-系统支持在运行时动态切换默认发布模式（Async/Sync）。
+系统支持在运行时动态切换默认发布模式（MainThread/Async/Sync）。
 
 ### 4.1 模式控制
 ```cpp
@@ -182,8 +207,10 @@ MessageCenter::Instance().SetPublishMode(PublishMode::Sync);
 
 // 方式 2: 使用辅助接口 (推荐)
 SetEventCenterPublishMode(PublishMode::Async);
-SetMessageCenterPublishMode(PublishMode::Async);
+SetMessageCenterPublishMode(PublishMode::MainThread); // 默认模式
 ```
+
+**注意**：在 `MainThread` 模式下，必须配合 `UpdateMessageCenter()` 调用，否则消息将积压在队列中不被执行。
 
 ---
 
