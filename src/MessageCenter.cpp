@@ -30,16 +30,22 @@ struct MessageCenter::Impl {
     std::atomic<double> m_maxUpdateMs{0.0};
 
     std::thread m_worker;
+    std::once_flag m_workerStartedFlag;
     bool m_running{true};
     // Default to MainThread as per new requirement
     std::atomic<PublishMode> m_publishMode{PublishMode::MainThread};
 
     Impl() {
-        m_worker = std::thread(&Impl::WorkerLoop, this);
     }
 
     ~Impl() {
         Stop();
+    }
+
+    void EnsureWorkerStarted() {
+        std::call_once(m_workerStartedFlag, [this]() {
+            m_worker = std::thread(&Impl::WorkerLoop, this);
+        });
     }
 
     void Stop() {
@@ -230,11 +236,14 @@ void MessageCenter::PrintSubscriptions() {
 }
 
 void MessageCenter::EnqueueTask(std::function<void()> task) {
-    {
-        std::lock_guard<std::mutex> lock(m_impl->m_queueMutex);
-        m_impl->m_queue.emplace(std::move(task));
+    if (m_impl) {
+        m_impl->EnsureWorkerStarted();
+        {
+            std::lock_guard<std::mutex> lock(m_impl->m_queueMutex);
+            m_impl->m_queue.emplace(std::move(task));
+        }
+        m_impl->m_cv.notify_one();
     }
-    m_impl->m_cv.notify_one();
 }
 
 void MessageCenter::EnqueueMainThreadTask(std::function<void()> task) {
