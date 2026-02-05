@@ -30,7 +30,7 @@ namespace {
     std::map<SubscriptionHandle, std::type_index> g_handleToEventTypeMap;
     std::atomic<SubscriptionHandle> g_nextSubscriptionId{1};
     std::mutex g_registryMutex;
-    std::atomic<PublishMode> g_publishMode{PublishMode::Async};
+    // g_publishMode removed - managed by EventCenter instance now
 }
 
 void EventRegistry::RegisterInterfaceHandler(const std::type_index& type, const std::shared_ptr<IEventHandler>& handler, bool isWeak)
@@ -110,14 +110,6 @@ void EventRegistry::UnregisterAllHandlers(const std::type_index& type)
     g_interfaceHandlers.erase(type);
 }
 
-void EventRegistry::SetPublishMode(PublishMode mode) {
-    g_publishMode.store(mode);
-}
-
-PublishMode EventRegistry::GetPublishMode() {
-    return g_publishMode.load();
-}
-
 void EventRegistry::Reset()
 {
     std::lock_guard<std::mutex> lock(g_registryMutex);
@@ -125,7 +117,6 @@ void EventRegistry::Reset()
     g_callbackHandlers.clear();
     g_handleToEventTypeMap.clear();
     g_nextSubscriptionId = 1;
-    g_publishMode = PublishMode::Async;
 }
 
 void EventRegistry::PrintSubscriptions()
@@ -136,7 +127,6 @@ void EventRegistry::PrintSubscriptions()
     if (g_interfaceHandlers.empty() && g_callbackHandlers.empty()) {
         std::cout << "  (No subscriptions)" << std::endl;
     } else {
-        // Collect all types from both maps
         std::map<std::type_index, std::pair<size_t, size_t>> counts;
         for (const auto& [type, group] : g_interfaceHandlers) {
             counts[type].first = group.strongRefs.size() + group.weakRefs.size();
@@ -194,37 +184,10 @@ void EventRegistry::DispatchEvent(const std::any &eventData, const std::type_ind
 }
 
 // =========================================================
-// SyncEventCenter
+// EventCenter (Unified)
 // =========================================================
 
-namespace {
-    static SyncEventCenter* g_syncInstance = nullptr;
-    static std::mutex g_syncCreationMutex;
-}
-
-SyncEventCenter& SyncEventCenter::Instance() {
-    if (!g_syncInstance) {
-        std::lock_guard<std::mutex> lock(g_syncCreationMutex);
-        if (!g_syncInstance) {
-            g_syncInstance = new SyncEventCenter();
-        }
-    }
-    return *g_syncInstance;
-}
-
-void SyncEventCenter::Destroy() {
-    std::lock_guard<std::mutex> lock(g_syncCreationMutex);
-    if (g_syncInstance) {
-        delete g_syncInstance;
-        g_syncInstance = nullptr;
-    }
-}
-
-// =========================================================
-// AsyncEventCenter
-// =========================================================
-
-struct AsyncEventCenter::Impl {
+struct EventCenter::Impl {
     struct ScheduledEvent
     {
         std::chrono::steady_clock::time_point executionTime;
@@ -246,6 +209,8 @@ struct AsyncEventCenter::Impl {
     std::atomic<bool> m_done{false};
     std::atomic<bool> m_threadRunning{false};
     std::mutex m_threadMutex;
+    
+    std::atomic<PublishMode> m_publishMode{PublishMode::Async};
 
     void WorkerLoop() {
         m_threadRunning = true;
@@ -286,33 +251,33 @@ struct AsyncEventCenter::Impl {
 };
 
 namespace {
-    static AsyncEventCenter* g_asyncInstance = nullptr;
-    static std::mutex g_asyncCreationMutex;
+    static EventCenter* g_instance = nullptr;
+    static std::mutex g_creationMutex;
 }
 
-AsyncEventCenter& AsyncEventCenter::Instance() {
-    if (!g_asyncInstance) {
-        std::lock_guard<std::mutex> lock(g_asyncCreationMutex);
-        if (!g_asyncInstance) {
-            g_asyncInstance = new AsyncEventCenter();
+EventCenter& EventCenter::Instance() {
+    if (!g_instance) {
+        std::lock_guard<std::mutex> lock(g_creationMutex);
+        if (!g_instance) {
+            g_instance = new EventCenter();
         }
     }
-    return *g_asyncInstance;
+    return *g_instance;
 }
 
-void AsyncEventCenter::Destroy() {
-    std::lock_guard<std::mutex> lock(g_asyncCreationMutex);
-    if (g_asyncInstance) {
-        delete g_asyncInstance;
-        g_asyncInstance = nullptr;
+void EventCenter::Destroy() {
+    std::lock_guard<std::mutex> lock(g_creationMutex);
+    if (g_instance) {
+        delete g_instance;
+        g_instance = nullptr;
     }
 }
 
-AsyncEventCenter::AsyncEventCenter() : m_impl(new Impl()) {
+EventCenter::EventCenter() : m_impl(new Impl()) {
     m_impl->m_workerThread = std::thread([this] { m_impl->WorkerLoop(); });
 }
 
-AsyncEventCenter::~AsyncEventCenter() {
+EventCenter::~EventCenter() {
     if (m_impl) {
         m_impl->m_done = true;
         m_impl->m_condVar.notify_all();
@@ -324,7 +289,20 @@ AsyncEventCenter::~AsyncEventCenter() {
     }
 }
 
-void AsyncEventCenter::PublishEventInternal(const std::any& eventData, const std::type_index& type, const std::chrono::steady_clock::time_point& timePoint) {
+void EventCenter::SetPublishMode(PublishMode mode) {
+    if (m_impl) {
+        m_impl->m_publishMode.store(mode);
+    }
+}
+
+PublishMode EventCenter::GetPublishMode() const {
+    if (m_impl) {
+        return m_impl->m_publishMode.load();
+    }
+    return PublishMode::Async;
+}
+
+void EventCenter::PublishEventInternal(const std::any& eventData, const std::type_index& type, const std::chrono::steady_clock::time_point& timePoint) {
     if (!m_impl) return;
     Impl::ScheduledEvent newEvent{timePoint, eventData, type};
     {
@@ -334,7 +312,7 @@ void AsyncEventCenter::PublishEventInternal(const std::any& eventData, const std
     m_impl->m_condVar.notify_one();
 }
 
-void AsyncEventCenter::CancelAllEvents() {
+void EventCenter::CancelAllEvents() {
     if (!m_impl) return;
     std::lock_guard<std::mutex> lock(m_impl->m_queueMutex);
     while (!m_impl->m_scheduledQueue.empty()) {

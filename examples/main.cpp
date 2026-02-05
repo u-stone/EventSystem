@@ -103,11 +103,11 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     std::cout << "  - Switch to Sync:" << std::endl;
-    EventRegistry::SetPublishMode(PublishMode::Sync);
+    SetEventCenterPublishMode(PublishMode::Sync);
     PublishEvent(DynamicEvent{2});
 
     std::cout << "  - Switch back to Async:" << std::endl;
-    EventRegistry::SetPublishMode(PublishMode::Async);
+    SetEventCenterPublishMode(PublishMode::Async);
     PublishEvent(DynamicEvent{3});
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
@@ -116,7 +116,7 @@ int main() {
     // 8. Debug Info
     std::cout << "\n[8] Debug Info" << std::endl;
     MessageCenter::Instance().PrintSubscriptions();
-    EventCenter::PrintSubscriptions();
+    EventRegistry::PrintSubscriptions();
 
     // 9. Type Promotion Demo (const char* -> std::string)
     std::cout << "\n[9] Type Promotion Demo" << std::endl;
@@ -179,7 +179,7 @@ int main() {
 
     // Explicitly destroy singletons to stop worker threads cleanly
     MessageCenter::Destroy();
-    AsyncEventCenter::Destroy();
+    EventCenter::Destroy();
 
     return 0;
 }
