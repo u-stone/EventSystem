@@ -141,8 +141,26 @@ void PublishAsync(const std::string& topic, Args&&... args) {
 *   **Closure (闭包)**: 我们构建了一个无参数的 lambda `std::function<void()>` 存入队列。这使得 Worker 线程不需要知道具体的参数类型，只需执行 `task()` 即可。
 *   **生命周期安全**: 通过 `tuple` 的值拷贝/移动语义，结合订阅端的 `Decay` 签名，我们构建了一个天生适应异步环境的安全系统。
 
+### 2.8 主线程分发与时间切片 (MainThread & Time Slicing)
+为了适配游戏引擎（如 Unity, Unreal, Cocos）的渲染线程安全要求，`MessageCenter` 引入了 `MainThread` 模式。
+
+#### 2.8.1 逻辑流程
+1.  **Publish**: 调用 `PublishMainThread` 或在 `MainThread` 模式下调用 `Publish`。
+2.  **Enqueue**: 任务进入 `m_mainThreadQueue`（由互斥锁保护，支持多线程发布）。
+3.  **Update**: 开发者在游戏主循环中每帧调用 `MessageCenter::Update()`。
+4.  **Execute**: 在主线程中依次弹出任务并执行。
+
+#### 2.8.2 时间切片 (Time Slicing)
+为了防止某一帧由于消息积压过多导致掉帧，`Update` 支持时间限制。
+- 通过 `SetMaxUpdateDuration(ms)` 设置阈值。
+- `Update` 会在执行完每个任务后检查已耗时。如果超过阈值，将记录警告日志并停止处理，剩余任务保留在队列中供下一帧执行。
+
+#### 2.8.3 延迟启动优化 (Lazy Creation)
+虽然 `MessageCenter` 拥有后台线程，但它是**延迟创建**的。如果应用始终运行在 `MainThread` 默认模式下且从未发布异步消息，系统将不会创建后台线程，实现零额外线程开销。
+
 ## 3. 总结
 该设计在保持接口简洁的同时，极大地扩展了灵活性：
-1.  **灵活性**: 支持任意数量和类型的参数。
+1.  **灵活性**: 支持任意数量和类型的参数，以及三种不同的分发策略（Sync, Async, MainThread）。
 2.  **安全性**: 编译期（模板实例化）和运行期（any_cast）双重保证类型安全。
 3.  **健壮性**: 通过签名标准化 (Decay) 和参数提升 (Promotion)，自动规避了引用悬垂和字面量不匹配等常见陷阱。
+4.  **性能与友好性**: 默认适配主循环，支持时间切片，且具备按需资源分配（Lazy Thread）的能力。
