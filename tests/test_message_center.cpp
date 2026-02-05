@@ -309,13 +309,13 @@ TEST_F(MessageCenterTest, MainThreadUpdate) {
     });
 
     // Explicitly publish to MainThread queue
-    MessageCenter::Instance().PublishMainThread("MainThreadTopic", 42);
+    PublishMessageMainThread("MainThreadTopic", 42);
 
     // Should not have executed yet
     EXPECT_FALSE(executed);
 
     // Run update to process queue
-    MessageCenter::Instance().Update();
+    UpdateMessageCenter();
 
     EXPECT_TRUE(executed);
 }
@@ -323,15 +323,15 @@ TEST_F(MessageCenterTest, MainThreadUpdate) {
 TEST_F(MessageCenterTest, DefaultPublishModeIsMainThread) {
     // New default is MainThread
     // Reset publish mode to default (MainThread)
-    MessageCenter::Instance().SetPublishMode(eventsystem::PublishMode::MainThread);
+    SetMessageCenterPublishMode(eventsystem::PublishMode::MainThread);
     
     bool executed = false;
     SubscribeMessage<>("DefaultTopic", [&](){ executed = true; });
 
-    MessageCenter::Instance().Publish("DefaultTopic"); // Should go to MainThread queue
+    PublishMessage("DefaultTopic"); // Should go to MainThread queue
     EXPECT_FALSE(executed);
 
-    MessageCenter::Instance().Update();
+    UpdateMessageCenter();
     EXPECT_TRUE(executed);
 }
 
@@ -344,22 +344,22 @@ TEST_F(MessageCenterTest, TimeSlicing) {
 
     // Queue 5 tasks, each taking ~10ms
     for(int i=0; i<5; ++i) {
-        MessageCenter::Instance().PublishMainThread("HeavyTopic");
+        PublishMessageMainThread("HeavyTopic");
     }
 
     // Allow only 25ms (enough for 2 tasks. 10ms + 10ms = 20ms < 25ms. 3rd would make it > 25ms but check is AFTER execution)
     // Execution 1: 10ms. elapsed 10 < 25.
     // Execution 2: 20ms. elapsed 20 < 25.
     // Execution 3: 30ms. elapsed 30 >= 25 -> STOP.
-    MessageCenter::Instance().SetMaxUpdateDuration(25.0); 
-    MessageCenter::Instance().Update();
+    SetMessageCenterMaxUpdateDuration(25.0); 
+    UpdateMessageCenter();
 
     EXPECT_GE(executionCount, 2);
     EXPECT_LE(executionCount, 3); 
 
     // Process remaining
-    MessageCenter::Instance().SetMaxUpdateDuration(0); // Unlimited
-    MessageCenter::Instance().Update();
+    SetMessageCenterMaxUpdateDuration(0); // Unlimited
+    UpdateMessageCenter();
     EXPECT_EQ(executionCount, 5);
 }
 
@@ -373,8 +373,8 @@ TEST_F(MessageCenterTest, MixedModes) {
         if (source == "Main") mainExecuted = true;
     });
 
-    MessageCenter::Instance().PublishAsync("MixedTopic", std::string("Async"));
-    MessageCenter::Instance().PublishMainThread("MixedTopic", std::string("Main"));
+    PublishMessageAsync("MixedTopic", std::string("Async"));
+    PublishMessageMainThread("MixedTopic", std::string("Main"));
 
     // Async should finish independently
     ASSERT_EQ(future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
@@ -382,6 +382,6 @@ TEST_F(MessageCenterTest, MixedModes) {
     // Main shouldn't have run yet
     EXPECT_FALSE(mainExecuted);
 
-    MessageCenter::Instance().Update();
+    UpdateMessageCenter();
     EXPECT_TRUE(mainExecuted);
 }
