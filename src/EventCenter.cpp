@@ -12,10 +12,10 @@
 namespace eventsystem {
 
 // =========================================================
-// EventRegistry Implementation (Hidden Static State)
+// EventCenter Implementation (PIMPL)
 // =========================================================
 
-namespace {
+struct EventCenter::Impl {
     struct InterfaceHandlers
     {
         std::vector<std::shared_ptr<IEventHandler>> strongRefs;
@@ -24,170 +24,6 @@ namespace {
 
     using GenericCallback = std::function<void(const std::any &)>;
 
-    // Global Registry State
-    std::map<std::type_index, InterfaceHandlers> g_interfaceHandlers;
-    std::map<std::type_index, std::map<SubscriptionHandle, GenericCallback>> g_callbackHandlers;
-    std::map<SubscriptionHandle, std::type_index> g_handleToEventTypeMap;
-    std::atomic<SubscriptionHandle> g_nextSubscriptionId{1};
-    std::mutex g_registryMutex;
-    // g_publishMode removed - managed by EventCenter instance now
-}
-
-void EventRegistry::RegisterInterfaceHandler(const std::type_index& type, const std::shared_ptr<IEventHandler>& handler, bool isWeak)
-{
-    std::lock_guard<std::mutex> lock(g_registryMutex);
-    if (isWeak) {
-        g_interfaceHandlers[type].weakRefs.push_back(handler);
-    } else {
-        g_interfaceHandlers[type].strongRefs.push_back(handler);
-    }
-}
-
-void EventRegistry::UnregisterInterfaceHandler(const std::type_index& type, const std::shared_ptr<IEventHandler>& handler)
-{
-    std::lock_guard<std::mutex> lock(g_registryMutex);
-    auto it = g_interfaceHandlers.find(type);
-    if (it != g_interfaceHandlers.end())
-    {
-        auto &handlerGroup = it->second;
-        handlerGroup.strongRefs.erase(
-            std::remove(handlerGroup.strongRefs.begin(), handlerGroup.strongRefs.end(), handler),
-            handlerGroup.strongRefs.end());
-
-        handlerGroup.weakRefs.erase(
-            std::remove_if(handlerGroup.weakRefs.begin(), handlerGroup.weakRefs.end(),
-                           [&handler](const std::weak_ptr<IEventHandler> &weak)
-                           {
-                               return weak.expired() || weak.lock() == handler;
-                           }),
-            handlerGroup.weakRefs.end());
-    }
-}
-
-SubscriptionHandle EventRegistry::RegisterCallbackHandler(const std::type_index& type, GenericCallback callback)
-{
-    std::lock_guard<std::mutex> lock(g_registryMutex);
-    SubscriptionHandle handle = g_nextSubscriptionId++;
-    g_callbackHandlers[type][handle] = std::move(callback);
-    g_handleToEventTypeMap.emplace(handle, type);
-    return handle;
-}
-
-void EventRegistry::UnregisterHandler(SubscriptionHandle handle)
-{
-    std::lock_guard<std::mutex> lock(g_registryMutex);
-    auto itType = g_handleToEventTypeMap.find(handle);
-    if (itType != g_handleToEventTypeMap.end())
-    {
-        std::type_index type = itType->second;
-        auto itCbMap = g_callbackHandlers.find(type);
-        if (itCbMap != g_callbackHandlers.end())
-        {
-            itCbMap->second.erase(handle);
-            if (itCbMap->second.empty())
-            {
-                g_callbackHandlers.erase(itCbMap);
-            }
-        }
-        g_handleToEventTypeMap.erase(itType);
-    }
-}
-
-void EventRegistry::UnregisterAllHandlers(const std::type_index& type)
-{
-    std::lock_guard<std::mutex> lock(g_registryMutex);
-
-    auto it_cb = g_callbackHandlers.find(type);
-    if (it_cb != g_callbackHandlers.end())
-    {
-        for (const auto &[handle, func] : it_cb->second)
-        {
-            g_handleToEventTypeMap.erase(handle);
-        }
-        g_callbackHandlers.erase(it_cb);
-    }
-
-    g_interfaceHandlers.erase(type);
-}
-
-void EventRegistry::Reset()
-{
-    std::lock_guard<std::mutex> lock(g_registryMutex);
-    g_interfaceHandlers.clear();
-    g_callbackHandlers.clear();
-    g_handleToEventTypeMap.clear();
-    g_nextSubscriptionId = 1;
-}
-
-void EventRegistry::PrintSubscriptions()
-{
-    std::lock_guard<std::mutex> lock(g_registryMutex);
-    std::cout << "--- EventCenter Subscriptions ---" << std::endl;
-    
-    if (g_interfaceHandlers.empty() && g_callbackHandlers.empty()) {
-        std::cout << "  (No subscriptions)" << std::endl;
-    } else {
-        std::map<std::type_index, std::pair<size_t, size_t>> counts;
-        for (const auto& [type, group] : g_interfaceHandlers) {
-            counts[type].first = group.strongRefs.size() + group.weakRefs.size();
-        }
-        for (const auto& [type, cbMap] : g_callbackHandlers) {
-            counts[type].second = cbMap.size();
-        }
-
-        for (const auto& [type, pair] : counts) {
-            std::cout << "  Type: " << type.name() 
-                      << " | Interface Handlers: " << pair.first
-                      << " | Callback Handlers: " << pair.second << std::endl;
-        }
-    }
-    std::cout << "---------------------------------" << std::endl;
-}
-
-void EventRegistry::DispatchEvent(const std::any &eventData, const std::type_index &eventType)
-{
-    std::vector<std::shared_ptr<IEventHandler>> strongHandlers;
-    std::vector<std::shared_ptr<IEventHandler>> weakHandlersLocked;
-    std::vector<GenericCallback> callbacks;
-
-    {
-        std::lock_guard<std::mutex> lock(g_registryMutex);
-
-        auto it = g_interfaceHandlers.find(eventType);
-        if (it != g_interfaceHandlers.end())
-        {
-            const auto &group = it->second;
-            strongHandlers = group.strongRefs; 
-
-            for (const auto &weak : group.weakRefs)
-            {
-                if (auto locked = weak.lock())
-                {
-                    weakHandlersLocked.push_back(locked);
-                }
-            }
-        }
-
-        auto itCb = g_callbackHandlers.find(eventType);
-        if (itCb != g_callbackHandlers.end())
-        {
-            for (const auto &pair : itCb->second)
-            {
-                callbacks.push_back(pair.second);
-            }
-        }
-    }
-
-    for (const auto &handler : strongHandlers) { try { handler->Handle(eventData); } catch (...) {} }
-    for (const auto &handler : weakHandlersLocked) { try { handler->Handle(eventData); } catch (...) {} }
-    for (const auto &cb : callbacks) { try { cb(eventData); } catch (...) {} }
-}
-
-// =========================================================
-// EventCenter (Unified)
-// =========================================================
-
-struct EventCenter::Impl {
     struct ScheduledEvent
     {
         std::chrono::steady_clock::time_point executionTime;
@@ -200,20 +36,39 @@ struct EventCenter::Impl {
         }
     };
 
+    // Registry Storage
+    std::map<std::type_index, InterfaceHandlers> m_interfaceHandlers;
+    std::map<std::type_index, std::map<SubscriptionHandle, GenericCallback>> m_callbackHandlers;
+    std::map<SubscriptionHandle, std::type_index> m_handleToEventTypeMap;
+    std::atomic<SubscriptionHandle> m_nextSubscriptionId{1};
+    std::mutex m_registryMutex;
+
+    // Async Queue
     std::vector<ScheduledEvent> m_pendingEvents;
-    std::priority_queue<ScheduledEvent, std::vector<ScheduledEvent>, std::greater<ScheduledEvent>> m_scheduledQueue;
+    using ScheduledQueue = std::priority_queue<ScheduledEvent, 
+                                               std::vector<ScheduledEvent>, 
+                                               std::greater<ScheduledEvent>>;
+    ScheduledQueue m_scheduledQueue;
     std::mutex m_queueMutex;
     std::condition_variable m_condVar;
 
     std::thread m_workerThread;
     std::atomic<bool> m_done{false};
-    std::atomic<bool> m_threadRunning{false};
-    std::mutex m_threadMutex;
-    
     std::atomic<PublishMode> m_publishMode{PublishMode::Async};
 
+    Impl() {
+        m_workerThread = std::thread(&Impl::WorkerLoop, this);
+    }
+
+    ~Impl() {
+        m_done = true;
+        m_condVar.notify_all();
+        if (m_workerThread.joinable()) {
+            m_workerThread.join();
+        }
+    }
+
     void WorkerLoop() {
-        m_threadRunning = true;
         while (!m_done) {
             std::unique_lock<std::mutex> lock(m_queueMutex);
 
@@ -241,12 +96,52 @@ struct EventCenter::Impl {
                 ScheduledEvent evt = std::move(const_cast<ScheduledEvent&>(top));
                 m_scheduledQueue.pop();
                 lock.unlock();
-                EventRegistry::DispatchEvent(evt.eventData, evt.eventType);
+                
+                // Dispatch logic inside Impl context
+                DispatchEventDirect(evt.eventData, evt.eventType);
             } else {
                 m_condVar.wait_until(lock, top.executionTime);
             }
         }
-        m_threadRunning = false;
+    }
+
+    void DispatchEventDirect(const std::any &eventData, const std::type_index &eventType)
+    {
+        std::vector<std::shared_ptr<IEventHandler>> strongHandlers;
+        std::vector<std::shared_ptr<IEventHandler>> weakHandlersLocked;
+        std::vector<GenericCallback> callbacks;
+
+        {
+            std::lock_guard<std::mutex> lock(m_registryMutex);
+
+            auto it = m_interfaceHandlers.find(eventType);
+            if (it != m_interfaceHandlers.end())
+            {
+                const auto &group = it->second;
+                strongHandlers = group.strongRefs; 
+
+                for (const auto &weak : group.weakRefs)
+                {
+                    if (auto locked = weak.lock())
+                    {
+                        weakHandlersLocked.push_back(locked);
+                    }
+                }
+            }
+
+            auto itCb = m_callbackHandlers.find(eventType);
+            if (itCb != m_callbackHandlers.end())
+            {
+                for (const auto &pair : itCb->second)
+                {
+                    callbacks.push_back(pair.second);
+                }
+            }
+        }
+
+        for (const auto &handler : strongHandlers) { try { handler->Handle(eventData); } catch (...) {} }
+        for (const auto &handler : weakHandlersLocked) { try { handler->Handle(eventData); } catch (...) {} }
+        for (const auto &cb : callbacks) { try { cb(eventData); } catch (...) {} }
     }
 };
 
@@ -273,36 +168,116 @@ void EventCenter::Destroy() {
     }
 }
 
-EventCenter::EventCenter() : m_impl(new Impl()) {
-    m_impl->m_workerThread = std::thread([this] { m_impl->WorkerLoop(); });
-}
+EventCenter::EventCenter() : m_impl(new Impl()) {}
 
 EventCenter::~EventCenter() {
     if (m_impl) {
-        m_impl->m_done = true;
-        m_impl->m_condVar.notify_all();
-        if (m_impl->m_workerThread.joinable()) {
-            m_impl->m_workerThread.join();
-        }
         delete m_impl;
         m_impl = nullptr;
     }
 }
 
 void EventCenter::SetPublishMode(PublishMode mode) {
-    if (m_impl) {
-        m_impl->m_publishMode.store(mode);
-    }
+    if (m_impl) m_impl->m_publishMode.store(mode);
 }
 
 PublishMode EventCenter::GetPublishMode() const {
-    if (m_impl) {
-        return m_impl->m_publishMode.load();
-    }
+    if (m_impl) return m_impl->m_publishMode.load();
     return PublishMode::Async;
 }
 
-void EventCenter::PublishEventInternal(const std::any& eventData, const std::type_index& type, const std::chrono::steady_clock::time_point& timePoint) {
+SubscriptionHandle EventCenter::SubscribeInternal(const std::type_index& type, 
+                                                  const std::shared_ptr<IEventHandler>& handler, 
+                                                  bool isWeak) {
+    if (!m_impl) return 0;
+    std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
+    if (isWeak) {
+        m_impl->m_interfaceHandlers[type].weakRefs.push_back(handler);
+    } else {
+        m_impl->m_interfaceHandlers[type].strongRefs.push_back(handler);
+    }
+    return 0; // Interface handlers don't use handle-based unsubscription in this design
+}
+
+SubscriptionHandle EventCenter::SubscribeCallbackInternal(const std::type_index& type, 
+                                                          GenericCallback callback) {
+    if (!m_impl) return 0;
+    std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
+    SubscriptionHandle handle = m_impl->m_nextSubscriptionId++;
+    m_impl->m_callbackHandlers[type][handle] = std::move(callback);
+    m_impl->m_handleToEventTypeMap.emplace(handle, type);
+    return handle;
+}
+
+void EventCenter::Unsubscribe(SubscriptionHandle handle) {
+    if (!m_impl) return;
+    std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
+    auto itType = m_impl->m_handleToEventTypeMap.find(handle);
+    if (itType != m_impl->m_handleToEventTypeMap.end())
+    {
+        std::type_index type = itType->second;
+        auto itCbMap = m_impl->m_callbackHandlers.find(type);
+        if (itCbMap != m_impl->m_callbackHandlers.end())
+        {
+            itCbMap->second.erase(handle);
+            if (itCbMap->second.empty()) m_impl->m_callbackHandlers.erase(itCbMap);
+        }
+        m_impl->m_handleToEventTypeMap.erase(itType);
+    }
+}
+
+void EventCenter::UnsubscribeAllInternal(const std::type_index& type) {
+    if (!m_impl) return;
+    std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
+    auto it_cb = m_impl->m_callbackHandlers.find(type);
+    if (it_cb != m_impl->m_callbackHandlers.end())
+    {
+        for (const auto &[handle, func] : it_cb->second) m_impl->m_handleToEventTypeMap.erase(handle);
+        m_impl->m_callbackHandlers.erase(it_cb);
+    }
+    m_impl->m_interfaceHandlers.erase(type);
+}
+
+void EventCenter::Reset() {
+    if (!m_impl) return;
+    std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
+    m_impl->m_interfaceHandlers.clear();
+    m_impl->m_callbackHandlers.clear();
+    m_impl->m_handleToEventTypeMap.clear();
+    m_impl->m_nextSubscriptionId = 1;
+}
+
+void EventCenter::PrintSubscriptions() {
+    if (!m_impl) return;
+    std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
+    std::cout << "--- EventCenter Subscriptions ---" << std::endl;
+    if (m_impl->m_interfaceHandlers.empty() && m_impl->m_callbackHandlers.empty()) {
+        std::cout << "  (No subscriptions)" << std::endl;
+    } else {
+        std::map<std::type_index, std::pair<size_t, size_t>> counts;
+        for (const auto& [type, group] : m_impl->m_interfaceHandlers) {
+            counts[type].first = group.strongRefs.size() + group.weakRefs.size();
+        }
+        for (const auto& [type, cbMap] : m_impl->m_callbackHandlers) {
+            counts[type].second = cbMap.size();
+        }
+        for (const auto& [type, pair] : counts) {
+            std::cout << "  Type: " << type.name() 
+                      << " | Interface Handlers: " << pair.first
+                      << " | Callback Handlers: " << pair.second << std::endl;
+        }
+    }
+    std::cout << "---------------------------------" << std::endl;
+}
+
+void EventCenter::DispatchEventInternal(const std::any &eventData, 
+                                        const std::type_index &eventType) {
+    if (m_impl) m_impl->DispatchEventDirect(eventData, eventType);
+}
+
+void EventCenter::EnqueueEventInternal(const std::any& eventData, 
+                                       const std::type_index& type, 
+                                       const std::chrono::steady_clock::time_point& timePoint) {
     if (!m_impl) return;
     Impl::ScheduledEvent newEvent{timePoint, eventData, type};
     {
@@ -315,9 +290,7 @@ void EventCenter::PublishEventInternal(const std::any& eventData, const std::typ
 void EventCenter::CancelAllEvents() {
     if (!m_impl) return;
     std::lock_guard<std::mutex> lock(m_impl->m_queueMutex);
-    while (!m_impl->m_scheduledQueue.empty()) {
-        m_impl->m_scheduledQueue.pop();
-    }
+    while (!m_impl->m_scheduledQueue.empty()) m_impl->m_scheduledQueue.pop();
     m_impl->m_pendingEvents.clear();
 }
 
