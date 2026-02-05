@@ -11,7 +11,10 @@ using namespace eventsystem;
 class MessageCenterTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // No explicit reset needed as we use different topics usually
+        DestroyMessageCenter();
+    }
+    void TearDown() override {
+        DestroyMessageCenter();
     }
 };
 
@@ -119,7 +122,7 @@ TEST_F(MessageCenterTest, UnsubscribeAll) {
     PublishMessageSync("bulk", 1);
     EXPECT_EQ(count, 2);
 
-    eventsystem::UnsubscribeMessage("bulk");
+    UnsubscribeMessage("bulk");
     PublishMessageSync("bulk", 1);
     EXPECT_EQ(count, 2); // Unchanged
 }
@@ -184,7 +187,8 @@ TEST_F(MessageCenterTest, MemberFunctionBind) {
     using namespace std::placeholders;
     
     // std::bind returns an unspecified type. 
-    auto token = SubscribeMessage<int>("member_bind", std::bind(&MemberMethodTester::OnMessage, &tester, _1));
+    auto token = SubscribeMessage<int>("member_bind", 
+                                       std::bind(&MemberMethodTester::OnMessage, &tester, _1));
     
     PublishMessageSync("member_bind", 456);
     EXPECT_EQ(tester.val, 456);
@@ -243,7 +247,9 @@ TEST_F(MessageCenterTest, AsyncLifetimeSafety) {
 
     // Give time for worker to process
     int retries = 0;
-    while(received_val == 0 && retries++ < 10) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    while(received_val == 0 && retries++ < 10) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
 
     EXPECT_EQ(received_val, 999);
     UnsubscribeMessage("async_lifetime", token);
@@ -252,13 +258,11 @@ TEST_F(MessageCenterTest, AsyncLifetimeSafety) {
 TEST_F(MessageCenterTest, ReferenceWrapperModification) {
     int target = 10;
     // To modify 'target', we must explicitly subscribe to reference_wrapper<int>
-    // Implicit deduction would decay int& to int (copy).
-    // So we must be explicit or use a lambda argument that deduces to it? 
-    // Lambda argument `std::reference_wrapper<int>`? No, lambda arg should be `int&` or `reference_wrapper`.
     
-    auto token = SubscribeMessage<std::reference_wrapper<int>>("ref_wrapper_test", [](std::reference_wrapper<int> val) {
-        val.get() = 20;
-    });
+    auto token = SubscribeMessage<std::reference_wrapper<int>>("ref_wrapper_test", 
+        [](std::reference_wrapper<int> val) {
+            val.get() = 20;
+        });
 
     PublishMessageSync("ref_wrapper_test", std::ref(target));
     
@@ -269,7 +273,6 @@ TEST_F(MessageCenterTest, ReferenceWrapperModification) {
 TEST_F(MessageCenterTest, ImplicitDeductionStringLiteral) {
     std::string received;
     // Implicit deduction from lambda taking const std::string&
-    // This relies on BOTH traits decay AND string literal promotion working together.
     auto token = SubscribeMessage("implicit_string_literal", [&](const std::string& s) {
         received = s;
     });

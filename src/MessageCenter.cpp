@@ -53,7 +53,8 @@ struct MessageCenter::Impl {
             std::cout << "  (No subscriptions)" << std::endl;
         } else {
             for (const auto& kv : m_subscriptions) {
-                std::cout << "  Topic: " << kv.first << " | Subscribers: " << kv.second.size() << std::endl;
+                std::cout << "  Topic: " << kv.first 
+                          << " | Subscribers: " << kv.second.size() << std::endl;
             }
         }
         std::cout << "-----------------------------------" << std::endl;
@@ -130,7 +131,8 @@ PublishMode MessageCenter::GetPublishMode() const {
     return PublishMode::Async;
 }
 
-MessageCenter::SubscriptionToken MessageCenter::SubscribeInternal(const std::string& topic, std::any callback) {
+MessageCenter::SubscriptionToken MessageCenter::SubscribeInternal(const std::string& topic, 
+                                                                  std::any callback) {
     std::lock_guard<std::mutex> lock(m_impl->m_registryMutex);
     SubscriptionToken token = m_impl->m_nextToken++;
     m_impl->m_subscriptions[topic].push_back({token, std::move(callback)});
