@@ -147,13 +147,18 @@ struct EventCenter::Impl {
 
 namespace {
     static std::atomic<EventCenter*> g_instance{nullptr};
-    static std::mutex g_creationMutex;
+    
+    // Prevent static initialization order fiasco
+    std::mutex& GetCreationMutex() {
+        static std::mutex m;
+        return m;
+    }
 }
 
 EventCenter& EventCenter::Instance() {
     EventCenter* tmp = g_instance.load(std::memory_order_acquire);
     if (tmp == nullptr) {
-        std::lock_guard<std::mutex> lock(g_creationMutex);
+        std::lock_guard<std::mutex> lock(GetCreationMutex());
         tmp = g_instance.load(std::memory_order_relaxed);
         if (tmp == nullptr) {
             tmp = new EventCenter();
@@ -164,7 +169,7 @@ EventCenter& EventCenter::Instance() {
 }
 
 void EventCenter::Destroy() {
-    std::lock_guard<std::mutex> lock(g_creationMutex);
+    std::lock_guard<std::mutex> lock(GetCreationMutex());
     EventCenter* tmp = g_instance.load(std::memory_order_relaxed);
     if (tmp) {
         delete tmp;
