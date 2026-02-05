@@ -79,6 +79,13 @@ int main() {
     SetMessageCenterPublishMode(PublishMode::Async);
     PublishMessage("mode_test");
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::cout << "  - Switching to MainThread (New Default):" << std::endl;
+    SetMessageCenterPublishMode(PublishMode::MainThread);
+    PublishMessage("mode_test");
+    std::cout << "    (Message queued... calling UpdateMessageCenter())" << std::endl;
+    UpdateMessageCenter();
+
     UnsubscribeMessage("mode_test", token5);
 
     // 7. EventCenter Dynamic Mode
