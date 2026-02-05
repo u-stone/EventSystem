@@ -88,13 +88,18 @@ struct MessageCenter::Impl {
 
 namespace {
     static std::atomic<MessageCenter*> g_instance{nullptr};
-    static std::mutex g_creationMutex;
+    
+    // Prevent static initialization order fiasco
+    std::mutex& GetCreationMutex() {
+        static std::mutex m;
+        return m;
+    }
 }
 
 MessageCenter& MessageCenter::Instance() {
     MessageCenter* tmp = g_instance.load(std::memory_order_acquire);
     if (tmp == nullptr) {
-        std::lock_guard<std::mutex> lock(g_creationMutex);
+        std::lock_guard<std::mutex> lock(GetCreationMutex());
         tmp = g_instance.load(std::memory_order_relaxed);
         if (tmp == nullptr) {
             tmp = new MessageCenter();
@@ -105,7 +110,7 @@ MessageCenter& MessageCenter::Instance() {
 }
 
 void MessageCenter::Destroy() {
-    std::lock_guard<std::mutex> lock(g_creationMutex);
+    std::lock_guard<std::mutex> lock(GetCreationMutex());
     MessageCenter* tmp = g_instance.load(std::memory_order_relaxed);
     if (tmp) {
         delete tmp;
