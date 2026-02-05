@@ -22,7 +22,7 @@ public:
 };
 
 //----------------------------------------------------------------
-// EventRegistry: Manages shared event subscriptions.
+// EventRegistry: Manages shared event subscriptions (Static Backend).
 //----------------------------------------------------------------
 class EVENTSYSTEM_API EventRegistry
 {
@@ -68,24 +68,10 @@ public:
         UnregisterAllHandlers(std::type_index(typeid(TEvent)));
     }
 
-    /**
-     * @brief Prints current event subscription details to stdout.
-     */
     static void PrintSubscriptions();
-
-    /**
-     * @brief Set the default publish mode (Async or Sync).
-     */
-    static void SetPublishMode(PublishMode mode);
-
-    /**
-     * @brief Get the current publish mode.
-     */
-    static PublishMode GetPublishMode();
-
     static void Reset();
 
-protected:
+    // Internal helper for dispatching (used by EventCenter)
     static void DispatchEvent(const std::any &eventData, const std::type_index &eventType);
 
 private:
@@ -98,45 +84,47 @@ private:
 };
 
 //----------------------------------------------------------------
-// SyncEventCenter
+// EventCenter: Unified Event System (Async & Sync)
 //----------------------------------------------------------------
-class EVENTSYSTEM_API SyncEventCenter : public EventRegistry
+class EVENTSYSTEM_API EventCenter
 {
 public:
-    static SyncEventCenter &Instance();
+    static EventCenter &Instance();
+    
+    /**
+     * @brief Explicitly destroys the singleton instance.
+     * Important for avoiding deadlocks on Windows DLL unload if the worker thread is running.
+     */
     static void Destroy();
 
-    SyncEventCenter(const SyncEventCenter &) = delete;
-    SyncEventCenter &operator=(const SyncEventCenter &) = delete;
+    EventCenter(const EventCenter &) = delete;
+    EventCenter &operator=(const EventCenter &) = delete;
+
+    ~EventCenter();
+
+    void SetPublishMode(PublishMode mode);
+    PublishMode GetPublishMode() const;
 
     template <typename TEvent>
-    void PublishEvent(const TEvent &event)
+    void PublishSync(const TEvent &event)
     {
-        DispatchEvent(event, std::type_index(typeid(TEvent)));
+        EventRegistry::DispatchEvent(event, std::type_index(typeid(TEvent)));
     }
 
-private:
-    SyncEventCenter() = default;
-};
-
-//----------------------------------------------------------------
-// AsyncEventCenter
-//----------------------------------------------------------------
-class EVENTSYSTEM_API AsyncEventCenter : public EventRegistry
-{
-public:
-    static AsyncEventCenter &Instance();
-    static void Destroy();
-
-    AsyncEventCenter(const AsyncEventCenter &) = delete;
-    AsyncEventCenter &operator=(const AsyncEventCenter &) = delete;
-
-    ~AsyncEventCenter();
-
     template <typename TEvent>
-    void PublishEvent(const TEvent &event)
+    void PublishAsync(const TEvent &event)
     {
         PublishEventInternal(event, std::type_index(typeid(TEvent)), std::chrono::steady_clock::now());
+    }
+
+    template <typename TEvent>
+    void Publish(const TEvent &event)
+    {
+        if (GetPublishMode() == PublishMode::Sync) {
+            PublishSync(event);
+        } else {
+            PublishAsync(event);
+        }
     }
 
     template <typename TEvent>
@@ -154,15 +142,14 @@ public:
     void CancelAllEvents();
 
 private:
-    AsyncEventCenter();
+    EventCenter();
     
     void PublishEventInternal(const std::any& eventData, const std::type_index& type, const std::chrono::steady_clock::time_point& timePoint);
 
+    // PIMPL for Async implementation details
     struct Impl;
     Impl* m_impl; 
 };
-
-using EventCenter = AsyncEventCenter;
 
 //----------------------------------------------------------------
 // Helper Functions
@@ -172,37 +159,33 @@ using EventCenter = AsyncEventCenter;
 template <typename TEvent>
 void PublishEventSync(const TEvent &event)
 {
-    eventsystem::SyncEventCenter::Instance().PublishEvent(event);
+    eventsystem::EventCenter::Instance().PublishSync(event);
 }
 
 // --- Asynchronous Publishing ---
 template <typename TEvent>
 void PublishEventAsync(const TEvent &event)
 {
-    eventsystem::AsyncEventCenter::Instance().PublishEvent(event);
+    eventsystem::EventCenter::Instance().PublishAsync(event);
 }
 
 template <typename TEvent>
 void PublishEventDelayedAsync(const TEvent &event, std::chrono::milliseconds delay)
 {
-    eventsystem::AsyncEventCenter::Instance().PublishEventDelayed(event, delay);
+    eventsystem::EventCenter::Instance().PublishEventDelayed(event, delay);
 }
 
 template <typename TEvent>
 void PublishEventAtAsync(const TEvent &event, const std::chrono::steady_clock::time_point &timePoint)
 {
-    eventsystem::AsyncEventCenter::Instance().PublishEventAt(event, timePoint);
+    eventsystem::EventCenter::Instance().PublishEventAt(event, timePoint);
 }
 
 // --- Default Aliases ---
 template <typename TEvent>
 void PublishEvent(const TEvent &event)
 {
-    if (eventsystem::EventRegistry::GetPublishMode() == PublishMode::Sync) {
-        PublishEventSync(event);
-    } else {
-        PublishEventAsync(event);
-    }
+    eventsystem::EventCenter::Instance().Publish(event);
 }
 
 template <typename TEvent>
@@ -250,14 +233,16 @@ inline void UnregisterStaticEventHandler()
     eventsystem::EventRegistry::UnregisterAllHandlers<TEvent>();
 }
 
+// --- C-style API ---
+
 inline void SetEventCenterPublishMode(eventsystem::PublishMode mode)
 {
-    eventsystem::EventRegistry::SetPublishMode(mode);
+    eventsystem::EventCenter::Instance().SetPublishMode(mode);
 }
 
 inline eventsystem::PublishMode GetEventCenterPublishMode()
 {
-    return eventsystem::EventRegistry::GetPublishMode();
+    return eventsystem::EventCenter::Instance().GetPublishMode();
 }
 
 } // namespace eventsystem
